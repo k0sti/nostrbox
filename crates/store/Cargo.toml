@@ -1,0 +1,11 @@
+[package]
+name = "nostrbox-store"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+rusqlite = { workspace = true }
+nostrbox-core = { workspace = true }
+tracing = { workspace = true }

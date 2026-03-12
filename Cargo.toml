@@ -1,0 +1,50 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/nostr",
+    "crates/store",
+    "crates/contextvm",
+    "crates/relay",
+    "crates/server",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Async
+tokio = { version = "1", features = ["full"] }
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Web / HTTP
+axum = "0.8"
+tower-http = { version = "0.6", features = ["cors", "fs"] }
+
+# Nostr
+# TODO: Choose concrete nostr library crate (nostr-sdk, nostr-rs, or custom)
+# For now using nostr-sdk as placeholder
+# nostr-sdk = "0.37"
+
+# ContextVM
+# TODO: Add rust-contextvm-sdk once published/available
+# contextvm-sdk = { git = "..." }
+
+# Internal crates
+nostrbox-core = { path = "crates/core" }
+nostrbox-nostr = { path = "crates/nostr" }
+nostrbox-store = { path = "crates/store" }
+nostrbox-contextvm = { path = "crates/contextvm" }
+nostrbox-relay = { path = "crates/relay" }

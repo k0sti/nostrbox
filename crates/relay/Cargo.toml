@@ -1,0 +1,14 @@
+[package]
+name = "nostrbox-relay"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+nostrbox-core = { workspace = true }
+nostrbox-store = { workspace = true }
+nostrbox-nostr = { workspace = true }
+tracing = { workspace = true }
+# TODO: Add websocket dependencies (tokio-tungstenite or axum ws)
