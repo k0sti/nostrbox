@@ -1,3 +1,4 @@
+pub mod access;
 pub mod actor;
 pub mod group;
 pub mod registration;
@@ -5,8 +6,9 @@ pub mod role;
 pub mod visibility;
 
 /// Re-export core types for convenience.
-pub use actor::{Actor, ActorKind};
-pub use group::{Group, GroupMember, GroupRole};
+pub use access::can_access;
+pub use actor::{Actor, ActorKind, ActorStatus};
+pub use group::{Group, GroupMember, GroupRole, GroupStatus, JoinPolicy};
 pub use registration::{Registration, RegistrationStatus};
 pub use role::GlobalRole;
 pub use visibility::{Scope, Visibility};

@@ -1,4 +1,4 @@
-use crate::event::NostrEvent;
+use nostr_sdk::Event;
 
 /// Validation result for an incoming Nostr event.
 #[derive(Debug)]
@@ -7,20 +7,10 @@ pub enum ValidationResult {
     Invalid(String),
 }
 
-/// Validate a Nostr event's structure and signature.
-///
-/// TODO: Implement real cryptographic validation once nostr library is chosen.
-pub fn validate_event(event: &NostrEvent) -> ValidationResult {
-    if event.id.is_empty() {
-        return ValidationResult::Invalid("empty event id".into());
+/// Validate a Nostr event's id hash and schnorr signature.
+pub fn validate_event(event: &Event) -> ValidationResult {
+    match event.verify() {
+        Ok(()) => ValidationResult::Valid,
+        Err(e) => ValidationResult::Invalid(format!("event verification failed: {e}")),
     }
-    if event.pubkey.is_empty() {
-        return ValidationResult::Invalid("empty pubkey".into());
-    }
-    if event.sig.is_empty() {
-        return ValidationResult::Invalid("empty signature".into());
-    }
-    // TODO: Verify event id hash matches content
-    // TODO: Verify schnorr signature
-    ValidationResult::Valid
 }

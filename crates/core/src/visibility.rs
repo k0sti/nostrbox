@@ -10,6 +10,10 @@ pub enum Visibility {
     Group,
     /// Server/internal use only.
     Internal,
+    /// Reserved for future: trust-graph based circles.
+    Circle,
+    /// Reserved for future: visible only to the actor themselves.
+    Personal,
 }
 
 /// Scope is the durable boundary identifier paired with visibility.

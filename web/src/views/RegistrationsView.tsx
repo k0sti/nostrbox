@@ -1,10 +1,6 @@
 import { useEffect, useState } from "react";
 import { ops, type Registration } from "../lib/api";
-
-function shortenPubkey(pk: string): string {
-  if (pk.length <= 16) return pk;
-  return `${pk.slice(0, 8)}...${pk.slice(-4)}`;
-}
+import { PubkeyCell } from "../components/PubkeyCell";
 
 export function RegistrationsView() {
   const [regs, setRegs] = useState<Registration[]>([]);
@@ -22,6 +18,11 @@ export function RegistrationsView() {
     load();
   };
 
+  const handleDeny = async (pubkey: string) => {
+    await ops.registrationDeny(pubkey);
+    load();
+  };
+
   return (
     <div>
       <h1>Registration Requests</h1>
@@ -31,16 +32,16 @@ export function RegistrationsView() {
         <table className="data-table">
           <thead>
             <tr>
-              <th>Pubkey</th>
+              <th>Identity</th>
               <th>Message</th>
               <th>Status</th>
-              <th>Action</th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody>
             {regs.map((r) => (
               <tr key={r.pubkey}>
-                <td className="pubkey-short">{shortenPubkey(r.pubkey)}</td>
+                <td><PubkeyCell pubkey={r.pubkey} /></td>
                 <td>{r.message || "—"}</td>
                 <td>
                   <span className={`badge badge-${r.status}`}>
@@ -49,12 +50,20 @@ export function RegistrationsView() {
                 </td>
                 <td>
                   {r.status === "pending" && (
-                    <button
-                      className="btn-action"
-                      onClick={() => handleApprove(r.pubkey)}
-                    >
-                      Approve
-                    </button>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button
+                        className="btn-action"
+                        onClick={() => handleApprove(r.pubkey)}
+                      >
+                        Approve
+                      </button>
+                      <button
+                        className="btn-action btn-danger"
+                        onClick={() => handleDeny(r.pubkey)}
+                      >
+                        Deny
+                      </button>
+                    </div>
                   )}
                 </td>
               </tr>

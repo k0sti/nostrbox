@@ -1,8 +1,6 @@
 use serde::{Deserialize, Serialize};
 
 /// A ContextVM operation request.
-///
-/// TODO: Align with rust-contextvm-sdk types once available.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OperationRequest {
     /// Operation name, e.g. "registration.list", "actor.get"
@@ -14,6 +12,20 @@ pub struct OperationRequest {
     pub caller: Option<String>,
 }
 
+/// Structured error codes per Shared Spec.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorCode {
+    Unauthorized,
+    Forbidden,
+    NotFound,
+    InvalidState,
+    Conflict,
+    ValidationError,
+    Internal,
+    UnknownOperation,
+}
+
 /// A ContextVM operation response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OperationResponse {
@@ -22,6 +34,8 @@ pub struct OperationResponse {
     pub data: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
 }
 
 impl OperationResponse {
@@ -30,6 +44,7 @@ impl OperationResponse {
             ok: true,
             data: Some(data),
             error: None,
+            error_code: None,
         }
     }
 
@@ -38,14 +53,20 @@ impl OperationResponse {
             ok: false,
             data: None,
             error: Some(msg.into()),
+            error_code: None,
         }
     }
-}
 
-/// Dashboard summary data.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DashboardSummary {
-    pub pending_registrations: u64,
-    pub total_actors: u64,
-    pub total_groups: u64,
+    pub fn error_with_code(code: ErrorCode, msg: impl Into<String>) -> Self {
+        let code_str = serde_json::to_value(&code)
+            .ok()
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_else(|| "internal".into());
+        Self {
+            ok: false,
+            data: None,
+            error: Some(msg.into()),
+            error_code: Some(code_str),
+        }
+    }
 }

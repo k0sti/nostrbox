@@ -10,5 +10,7 @@ tokio = { workspace = true }
 nostrbox-core = { workspace = true }
 nostrbox-store = { workspace = true }
 nostrbox-nostr = { workspace = true }
+nostr-sdk = { workspace = true }
+nostr-relay-builder = { workspace = true }
+nostr-database = { workspace = true }
 tracing = { workspace = true }
-# TODO: Add websocket dependencies (tokio-tungstenite or axum ws)

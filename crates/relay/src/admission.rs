@@ -32,7 +32,15 @@ pub fn check_read_admission(
 ) -> AdmissionResult {
     match visibility {
         Visibility::Public => AdmissionResult::Allow,
-        Visibility::Internal => AdmissionResult::Deny("internal only".into()),
+        Visibility::Internal => {
+            // Only owner/system can read internal content
+            match store.get_actor(pubkey) {
+                Ok(Some(actor)) if actor.global_role == GlobalRole::Owner => {
+                    AdmissionResult::Allow
+                }
+                _ => AdmissionResult::Deny("internal only".into()),
+            }
+        }
         Visibility::Group => {
             let Some(gid) = group_id else {
                 return AdmissionResult::Deny("group visibility requires group_id".into());
@@ -48,6 +56,10 @@ pub fn check_read_admission(
                 Ok(None) => AdmissionResult::Deny("group not found".into()),
                 Err(e) => AdmissionResult::Deny(format!("store error: {e}")),
             }
+        }
+        // Reserved variants — deny for now
+        Visibility::Circle | Visibility::Personal => {
+            AdmissionResult::Deny("visibility type not yet supported".into())
         }
     }
 }

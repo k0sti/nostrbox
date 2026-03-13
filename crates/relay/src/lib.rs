@@ -1,9 +1,10 @@
-//! Relay module — Nostr websocket relay behavior.
+//! Relay module — Nostr relay built on nostr-relay-builder.
 //!
-//! TODO: Implement full NIP-01 relay protocol.
-//! For now this module provides admission/access check hooks
-//! that the server can use when accepting events and subscriptions.
-//!
-//! The relay asks the core/store whether access is allowed.
+//! Provides:
+//! - Admission/access check hooks (admission.rs)
+//! - Write/query policy plugins (policy.rs)
+//! - Relay setup and lifecycle (setup.rs)
 
 pub mod admission;
+pub mod policy;
+pub mod setup;

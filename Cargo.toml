@@ -30,17 +30,21 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Web / HTTP
-axum = "0.8"
+axum = { version = "0.8", features = ["ws"] }
+tokio-tungstenite = "0.26"
+futures-util = "0.3"
 tower-http = { version = "0.6", features = ["cors", "fs"] }
 
 # Nostr
-# TODO: Choose concrete nostr library crate (nostr-sdk, nostr-rs, or custom)
-# For now using nostr-sdk as placeholder
-# nostr-sdk = "0.37"
+nostr-sdk = { version = "0.43", features = ["nip59"] }
+nostr-relay-builder = "0.43"
+nostr-database = "0.43"
 
 # ContextVM
-# TODO: Add rust-contextvm-sdk once published/available
-# contextvm-sdk = { git = "..." }
+contextvm-sdk = { path = "../rust-contextvm-sdk" }
+
+# Config
+toml_parse = { package = "toml", version = "0.8" }
 
 # Internal crates
 nostrbox-core = { path = "crates/core" }
