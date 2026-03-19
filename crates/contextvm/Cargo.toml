@@ -12,3 +12,10 @@ tracing = { workspace = true }
 nostr-sdk = { workspace = true }
 nostrbox-nostr = { workspace = true }
 contextvm-sdk = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+rand = { workspace = true }
+base64 = { workspace = true }
+
+[dev-dependencies]
+rusqlite = { workspace = true }

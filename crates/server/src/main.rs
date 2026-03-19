@@ -6,7 +6,7 @@ use axum::{
     extract::{FromRequest, ws::{WebSocket, WebSocketUpgrade, Message}},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json},
-    routing::{any, get, post},
+    routing::{get, post},
 };
 use futures_util::{SinkExt, StreamExt};
 use tower_http::cors::CorsLayer;
@@ -15,7 +15,7 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 use nostr_sdk::ToBech32;
-use nostrbox_contextvm::{OperationRequest, OperationResponse};
+use nostrbox_contextvm::{EmailConfig, OperationRequest, OperationResponse};
 use nostrbox_contextvm::OperationHandler;
 use nostrbox_relay::setup::{RelayConfig, start_relay};
 use nostrbox_store::StorePool;
@@ -33,6 +33,9 @@ pub struct Config {
     /// Public base URL (e.g. "https://nostrbox.atlantislabs.space").
     /// Used to derive the public relay WebSocket URL (wss://.../ws).
     pub public_url: Option<String>,
+    /// Email login configuration.
+    #[serde(default)]
+    pub email: EmailConfig,
 }
 
 impl Default for Config {
@@ -45,6 +48,7 @@ impl Default for Config {
             relay_port: 7777,
             relay_urls: vec![],
             public_url: None,
+            email: EmailConfig::default(),
         }
     }
 }
@@ -93,6 +97,8 @@ struct AppState {
     public_relay_url: String,
     /// Internal relay URL (ws://127.0.0.1:PORT) for proxying.
     local_relay_url: String,
+    /// Email login configuration.
+    email_config: Arc<EmailConfig>,
 }
 
 #[tokio::main]
@@ -137,14 +143,33 @@ async fn main() {
     let public_relay_url = config.public_relay_url(&local_relay_url);
     info!(local = %local_relay_url, public = %public_relay_url, "relay running");
 
+    // Build email config (env var overrides config file for API key)
+    let mut email_config = config.email.clone();
+    if let Ok(key) = std::env::var("RESEND_API_KEY") {
+        email_config.resend_api_key = key;
+    }
+    if email_config.public_url.is_empty() {
+        if let Some(ref url) = config.public_url {
+            email_config.public_url = url.clone();
+        }
+    }
+    let email_config = Arc::new(email_config);
+
+    if email_config.is_enabled() {
+        info!("email login enabled (Resend)");
+    } else {
+        info!("email login disabled (no resend_api_key)");
+    }
+
     // Start ContextVM transport (if identity is configured)
     if let Some(ref keys) = keys {
         let transport_pool = pool.clone();
         let transport_keys = keys.clone();
         let transport_relay_url = local_relay_url.clone();
+        let transport_email_config = email_config.clone();
         tokio::spawn(async move {
             if let Err(e) =
-                start_contextvm_transport(&transport_relay_url, &transport_keys, transport_pool)
+                start_contextvm_transport(&transport_relay_url, &transport_keys, transport_pool, transport_email_config)
                     .await
             {
                 tracing::error!("ContextVM transport failed: {e}");
@@ -163,11 +188,39 @@ async fn main() {
         });
     }
 
+    // Start cleanup job for stale login tokens and abandoned email registrations
+    {
+        let cleanup_pool = pool.clone();
+        let cleanup_email_config = email_config.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+            loop {
+                interval.tick().await;
+                let pool = cleanup_pool.clone();
+                let ttl = cleanup_email_config.abandoned_ttl();
+                if let Err(e) = tokio::task::spawn_blocking(move || {
+                    let store = pool.get()?;
+                    let tokens = store.cleanup_login_tokens().unwrap_or(0);
+                    let emails = store.cleanup_abandoned_email_identities(ttl).unwrap_or(0);
+                    if tokens > 0 || emails > 0 {
+                        info!(tokens, emails, "email cleanup completed");
+                    }
+                    Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+                })
+                .await
+                {
+                    tracing::warn!("email cleanup task failed: {e}");
+                }
+            }
+        });
+    }
+
     let state = AppState {
         pool,
         keys,
         public_relay_url,
         local_relay_url,
+        email_config,
     };
 
     // SPA fallback: serve index.html for non-API routes
@@ -330,6 +383,7 @@ async fn start_contextvm_transport(
     relay_url: &str,
     keys: &nostr_sdk::Keys,
     pool: StorePool,
+    email_config: Arc<EmailConfig>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use contextvm_sdk::core::types::{JsonRpcMessage, JsonRpcResponse, ServerInfo};
     use contextvm_sdk::transport::server::{NostrServerTransport, NostrServerTransportConfig};
@@ -375,9 +429,11 @@ async fn start_contextvm_transport(
         // Dispatch on a blocking thread (pool hands out a connection)
         let op_pool = pool.clone();
         let keys_clone = keys.clone();
+        let op_email_config = email_config.clone();
         let resp = tokio::task::spawn_blocking(move || {
             let store = op_pool.get().expect("failed to get store connection");
-            let handler = OperationHandler::with_keys(&store, &keys_clone);
+            let handler = OperationHandler::with_keys(&store, &keys_clone)
+                .with_email(&op_email_config);
             handler.handle(&op_req)
         })
         .await
@@ -540,6 +596,7 @@ async fn handle_operation(
 ) -> (StatusCode, Json<OperationResponse>) {
     let pool = state.pool.clone();
     let keys = state.keys.clone();
+    let email_config = state.email_config.clone();
     let resp = tokio::task::spawn_blocking(move || {
         let store = pool.get().expect("failed to get store connection");
         let handler = if let Some(ref keys) = keys {
@@ -547,7 +604,7 @@ async fn handle_operation(
         } else {
             OperationHandler::new(&store)
         };
-        handler.handle(&req)
+        handler.with_email(&email_config).handle(&req)
     })
     .await
     .unwrap();

@@ -410,3 +410,446 @@ fn unknown_operation_returns_error() {
     assert_eq!(resp.error_code.as_deref(), Some("unknown_operation"));
     assert!(resp.error.unwrap().contains("unicorn.fly"));
 }
+
+// ── Email registration tests ──────────────────────────────────────────
+
+// Use a valid secp256k1 public key for testing (generator point x-coordinate)
+const TEST_NPUB: &str = "npub10xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqpkge6d";
+const TEST_HEX: &str = "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
+
+#[test]
+fn email_register_success() {
+    let store = make_store();
+    let handler = OperationHandler::new(&store);
+
+    let resp = handler.handle(&req(
+        "email.register",
+        json!({
+            "npub": TEST_NPUB,
+            "ncryptsec": "ncryptsec1test_encrypted_blob",
+            "email": "Alice@Example.COM"
+        }),
+        None,
+    ));
+    assert!(resp.ok, "email.register failed: {:?}", resp.error);
+    assert_eq!(resp.data.unwrap()["status"], "registered");
+
+    // Verify email identity was stored (normalized to lowercase)
+    let identity = store.get_email_identity("alice@example.com").unwrap();
+    assert!(identity.is_some());
+    let id = identity.unwrap();
+    assert_eq!(id["ncryptsec"], "ncryptsec1test_encrypted_blob");
+
+    // Verify a registration request was created
+    let reg = store.get_registration(TEST_HEX).unwrap();
+    assert!(reg.is_some());
+    assert_eq!(reg.unwrap().status, RegistrationStatus::Pending);
+}
+
+#[test]
+fn email_register_duplicate_returns_success() {
+    let store = make_store();
+    let handler = OperationHandler::new(&store);
+
+    // First registration
+    handler.handle(&req(
+        "email.register",
+        json!({
+            "npub": TEST_NPUB,
+            "ncryptsec": "ncryptsec1original",
+            "email": "dupe@example.com"
+        }),
+        None,
+    ));
+
+    // Second registration with same email — should succeed without overwriting
+    let resp = handler.handle(&req(
+        "email.register",
+        json!({
+            "npub": TEST_NPUB,
+            "ncryptsec": "ncryptsec1different",
+            "email": "dupe@example.com"
+        }),
+        None,
+    ));
+    assert!(resp.ok);
+
+    // Original ncryptsec should be preserved
+    let id = store.get_email_identity("dupe@example.com").unwrap().unwrap();
+    assert_eq!(id["ncryptsec"], "ncryptsec1original");
+}
+
+#[test]
+fn email_register_missing_params() {
+    let store = make_store();
+    let handler = OperationHandler::new(&store);
+
+    let resp = handler.handle(&req("email.register", json!({}), None));
+    assert!(!resp.ok);
+    assert_eq!(resp.error_code.as_deref(), Some("validation_error"));
+}
+
+#[test]
+fn email_register_invalid_npub() {
+    let store = make_store();
+    let handler = OperationHandler::new(&store);
+
+    let resp = handler.handle(&req(
+        "email.register",
+        json!({
+            "npub": "not_a_valid_npub",
+            "ncryptsec": "ncryptsec1blob",
+            "email": "user@example.com"
+        }),
+        None,
+    ));
+    assert!(!resp.ok);
+    assert_eq!(resp.error_code.as_deref(), Some("validation_error"));
+}
+
+// ── Email login tests ─────────────────────────────────────────────────
+
+#[test]
+fn email_login_nonexistent_returns_success() {
+    // Anti-enumeration: always returns success even if email doesn't exist
+    let store = make_store();
+    let handler = OperationHandler::new(&store);
+
+    let resp = handler.handle(&req(
+        "email.login",
+        json!({"email": "nobody@example.com"}),
+        None,
+    ));
+    assert!(resp.ok);
+    assert_eq!(resp.data.unwrap()["status"], "email_sent");
+}
+
+#[test]
+fn email_login_creates_token() {
+    let store = make_store();
+    let handler = OperationHandler::new(&store);
+
+    // Register first
+    handler.handle(&req(
+        "email.register",
+        json!({
+            "npub": TEST_NPUB,
+            "ncryptsec": "ncryptsec1blob",
+            "email": "login@example.com"
+        }),
+        None,
+    ));
+
+    // Login — no tokio runtime in test, so email won't actually send,
+    // but token should be created
+    let resp = handler.handle(&req(
+        "email.login",
+        json!({"email": "login@example.com"}),
+        None,
+    ));
+    assert!(resp.ok);
+
+    // Verify a token was created
+    let count = store.count_recent_login_tokens("login@example.com", 0).unwrap();
+    assert_eq!(count, 1);
+}
+
+// ── Email redeem tests ────────────────────────────────────────────────
+
+#[test]
+fn email_redeem_success() {
+    let store = make_store();
+    let handler = OperationHandler::new(&store);
+
+    // Register an email identity
+    handler.handle(&req(
+        "email.register",
+        json!({
+            "npub": TEST_NPUB,
+            "ncryptsec": "ncryptsec1secret_blob",
+            "email": "redeem@example.com"
+        }),
+        None,
+    ));
+
+    // Manually create a token (simulating what email.login does)
+    let token = "test_token_12345";
+    let expires_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 900;
+    store
+        .create_login_token(token, "redeem@example.com", expires_at)
+        .unwrap();
+
+    // Redeem the token
+    let resp = handler.handle(&req(
+        "email.redeem",
+        json!({"token": token}),
+        None,
+    ));
+    assert!(resp.ok, "email.redeem failed: {:?}", resp.error);
+    let data = resp.data.unwrap();
+    assert_eq!(data["ncryptsec"], "ncryptsec1secret_blob");
+    assert!(data["npub"].as_str().unwrap().starts_with("npub1"));
+}
+
+#[test]
+fn email_redeem_invalid_token() {
+    let store = make_store();
+    let handler = OperationHandler::new(&store);
+
+    let resp = handler.handle(&req(
+        "email.redeem",
+        json!({"token": "bogus_token"}),
+        None,
+    ));
+    assert!(!resp.ok);
+    assert_eq!(resp.error_code.as_deref(), Some("unauthorized"));
+}
+
+#[test]
+fn email_redeem_token_single_use() {
+    let store = make_store();
+    let handler = OperationHandler::new(&store);
+
+    // Setup
+    handler.handle(&req(
+        "email.register",
+        json!({
+            "npub": TEST_NPUB,
+            "ncryptsec": "ncryptsec1blob",
+            "email": "single@example.com"
+        }),
+        None,
+    ));
+    let expires_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 900;
+    store
+        .create_login_token("one_time_token", "single@example.com", expires_at)
+        .unwrap();
+
+    // First redeem succeeds
+    let resp = handler.handle(&req(
+        "email.redeem",
+        json!({"token": "one_time_token"}),
+        None,
+    ));
+    assert!(resp.ok);
+
+    // Second redeem fails (token already used)
+    let resp = handler.handle(&req(
+        "email.redeem",
+        json!({"token": "one_time_token"}),
+        None,
+    ));
+    assert!(!resp.ok);
+    assert_eq!(resp.error_code.as_deref(), Some("unauthorized"));
+}
+
+#[test]
+fn email_redeem_expired_token() {
+    let store = make_store();
+    let handler = OperationHandler::new(&store);
+
+    handler.handle(&req(
+        "email.register",
+        json!({
+            "npub": TEST_NPUB,
+            "ncryptsec": "ncryptsec1blob",
+            "email": "expired@example.com"
+        }),
+        None,
+    ));
+
+    // Create an already-expired token
+    store
+        .create_login_token("expired_token", "expired@example.com", 1)
+        .unwrap();
+
+    let resp = handler.handle(&req(
+        "email.redeem",
+        json!({"token": "expired_token"}),
+        None,
+    ));
+    assert!(!resp.ok);
+    assert_eq!(resp.error_code.as_deref(), Some("unauthorized"));
+}
+
+// ── Email clear tests ─────────────────────────────────────────────────
+
+#[test]
+fn email_clear_success() {
+    let store = make_store();
+    let handler = OperationHandler::new(&store);
+
+    // Register
+    handler.handle(&req(
+        "email.register",
+        json!({
+            "npub": TEST_NPUB,
+            "ncryptsec": "ncryptsec1to_clear",
+            "email": "clear@example.com"
+        }),
+        None,
+    ));
+
+    // Clear (authenticated as the pubkey owner)
+    let resp = handler.handle(&req(
+        "email.clear",
+        json!({}),
+        Some(TEST_HEX),
+    ));
+    assert!(resp.ok, "email.clear failed: {:?}", resp.error);
+    let data = resp.data.unwrap();
+    assert_eq!(data["cleared"], 1);
+
+    // Verify ncryptsec is now null
+    let id = store.get_email_identity("clear@example.com").unwrap().unwrap();
+    assert!(id["ncryptsec"].is_null());
+}
+
+#[test]
+fn email_clear_requires_auth() {
+    let store = make_store();
+    let handler = OperationHandler::new(&store);
+
+    let resp = handler.handle(&req("email.clear", json!({}), None));
+    assert!(!resp.ok);
+    assert_eq!(resp.error_code.as_deref(), Some("unauthorized"));
+}
+
+// ── Email change_password tests ───────────────────────────────────────
+
+#[test]
+fn email_change_password_success() {
+    let store = make_store();
+    let handler = OperationHandler::new(&store);
+
+    // Register
+    handler.handle(&req(
+        "email.register",
+        json!({
+            "npub": TEST_NPUB,
+            "ncryptsec": "ncryptsec1old_password",
+            "email": "changepw@example.com"
+        }),
+        None,
+    ));
+
+    // Change password (re-encrypted ncryptsec)
+    let resp = handler.handle(&req(
+        "email.change_password",
+        json!({
+            "email": "changepw@example.com",
+            "ncryptsec": "ncryptsec1new_password"
+        }),
+        Some(TEST_HEX),
+    ));
+    assert!(resp.ok, "email.change_password failed: {:?}", resp.error);
+    assert_eq!(resp.data.unwrap()["status"], "updated");
+
+    // Verify updated
+    let id = store.get_email_identity("changepw@example.com").unwrap().unwrap();
+    assert_eq!(id["ncryptsec"], "ncryptsec1new_password");
+}
+
+#[test]
+fn email_change_password_wrong_owner() {
+    let store = make_store();
+    let handler = OperationHandler::new(&store);
+
+    handler.handle(&req(
+        "email.register",
+        json!({
+            "npub": TEST_NPUB,
+            "ncryptsec": "ncryptsec1blob",
+            "email": "owned@example.com"
+        }),
+        None,
+    ));
+
+    // Try to change password as a different pubkey
+    let resp = handler.handle(&req(
+        "email.change_password",
+        json!({
+            "email": "owned@example.com",
+            "ncryptsec": "ncryptsec1hacked"
+        }),
+        Some("different_pubkey"),
+    ));
+    assert!(!resp.ok);
+    assert_eq!(resp.error_code.as_deref(), Some("forbidden"));
+}
+
+#[test]
+fn email_change_password_requires_auth() {
+    let store = make_store();
+    let handler = OperationHandler::new(&store);
+
+    let resp = handler.handle(&req(
+        "email.change_password",
+        json!({
+            "email": "test@example.com",
+            "ncryptsec": "ncryptsec1blob"
+        }),
+        None,
+    ));
+    assert!(!resp.ok);
+    assert_eq!(resp.error_code.as_deref(), Some("unauthorized"));
+}
+
+// ── Store cleanup tests ───────────────────────────────────────────────
+
+#[test]
+fn cleanup_expired_tokens() {
+    let store = make_store();
+
+    // Create an expired token
+    store.create_login_token("expired1", "user@example.com", 1).unwrap();
+    // Create a used token
+    let future = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 900;
+    store.create_login_token("used1", "user@example.com", future).unwrap();
+    store.redeem_login_token("used1").unwrap();
+    // Create a valid token
+    store.create_login_token("valid1", "user@example.com", future).unwrap();
+
+    let deleted = store.cleanup_login_tokens().unwrap();
+    assert_eq!(deleted, 2); // expired + used
+
+    // Valid token should still exist
+    let email = store.redeem_login_token("valid1").unwrap();
+    assert!(email.is_some());
+}
+
+#[test]
+fn cleanup_abandoned_email_identities() {
+    let store = make_store();
+
+    // Insert an email identity with a timestamp 120 seconds in the past
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let old_ts = now - 120;
+    store.conn().execute(
+        "INSERT INTO email_identities (email, pubkey, ncryptsec, created_at) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params!["abandoned@example.com", "orphan_pubkey", "blob", old_ts],
+    ).unwrap();
+
+    // With a long TTL (1 hour), the 2-minute-old row should survive
+    let deleted = store.cleanup_abandoned_email_identities(3600).unwrap();
+    assert_eq!(deleted, 0);
+
+    // With a short TTL (60s), the 120-second-old row should be cleaned up
+    let deleted = store.cleanup_abandoned_email_identities(60).unwrap();
+    assert_eq!(deleted, 1);
+}

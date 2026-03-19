@@ -84,6 +84,28 @@ impl Store {
             CREATE INDEX IF NOT EXISTS idx_events_kind ON events(kind);
             CREATE INDEX IF NOT EXISTS idx_events_pubkey ON events(pubkey);
             CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at);
+
+            CREATE TABLE IF NOT EXISTS email_identities (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT NOT NULL,
+                pubkey TEXT NOT NULL,
+                ncryptsec TEXT,
+                created_at INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(email)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_email_identities_pubkey ON email_identities(pubkey);
+
+            CREATE TABLE IF NOT EXISTS login_tokens (
+                token TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                expires_at INTEGER NOT NULL,
+                used INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_login_tokens_email ON login_tokens(email);
+            CREATE INDEX IF NOT EXISTS idx_login_tokens_expires_at ON login_tokens(expires_at);
             ",
         )?;
         Ok(())
