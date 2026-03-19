@@ -1,13 +1,13 @@
 /**
- * Nostr identity helpers using nostr-tools for bech32/key encoding
- * and applesauce-signers for NIP-46 Nostr Connect.
+ * Nostr identity helpers using applesauce for bech32/key encoding,
+ * relay connections, and NIP-46 Nostr Connect.
  */
 
-import { nip19 } from "nostr-tools";
-import { Relay } from "nostr-tools/relay";
+import { npubEncode } from "applesauce-core/helpers/pointers";
+import { Relay } from "applesauce-relay";
+import { RelayPool } from "applesauce-relay";
 import { NostrConnectSigner } from "applesauce-signers";
-import type { NostrPool } from "applesauce-signers";
-import { Observable } from "rxjs";
+
 
 export interface NostrIdentity {
   pubkey: string;
@@ -21,7 +21,7 @@ export interface NostrIdentity {
 /** Convert hex pubkey to bech32 npub. */
 export function pubkeyToNpub(hex: string): string {
   try {
-    return nip19.npubEncode(hex);
+    return npubEncode(hex);
   } catch {
     return "";
   }
@@ -68,55 +68,8 @@ export async function loginWithAmber(): Promise<NostrIdentity | null> {
   return loginWithExtension();
 }
 
-/**
- * Build a simple NostrPool from nostr-tools relays for applesauce-signers.
- */
-function buildPool(_defaultRelays: string[]): NostrPool {
-  const relays = new Map<string, Relay>();
-
-  const getRelay = async (url: string): Promise<Relay> => {
-    let relay = relays.get(url);
-    if (relay) return relay;
-    relay = await Relay.connect(url);
-    relays.set(url, relay);
-    return relay;
-  };
-
-  return {
-    subscription: (urls, filters) => {
-      return new Observable((subscriber) => {
-        const subs: Array<{ close: () => void }> = [];
-
-        Promise.all(
-          urls.map(async (url) => {
-            try {
-              const relay = await getRelay(url);
-              const sub = relay.subscribe(filters, {
-                onevent: (event) => subscriber.next(event),
-                oneose: () => {},
-              });
-              subs.push(sub);
-            } catch (e) {
-              console.warn(`Failed to subscribe to ${url}:`, e);
-            }
-          })
-        );
-
-        return () => {
-          subs.forEach((s) => s.close());
-        };
-      });
-    },
-    publish: async (urls, event) => {
-      await Promise.allSettled(
-        urls.map(async (url) => {
-          const relay = await getRelay(url);
-          await relay.publish(event);
-        })
-      );
-    },
-  };
-}
+// Shared RelayPool instance for NIP-46 connections
+const pool = new RelayPool();
 
 // Track the active NIP-46 signer for cleanup
 let activeConnectSigner: NostrConnectSigner | null = null;
@@ -132,7 +85,6 @@ export async function loginWithNostrConnect(
     const { remote, relays, secret } =
       NostrConnectSigner.parseBunkerURI(bunkerUri);
 
-    const pool = buildPool(relays);
     const signer = new NostrConnectSigner({
       relays,
       remote,
@@ -177,36 +129,34 @@ function fetchKind0FromRelay(
 ): Promise<{ displayName?: string; picture?: string } | null> {
   return new Promise((resolve) => {
     const timer = setTimeout(() => resolve(null), timeoutMs);
+    const relay = new Relay(relayUrl);
 
-    Relay.connect(relayUrl)
-      .then((relay) => {
-        relay.subscribe(
-          [{ kinds: [0], authors: [pubkey], limit: 1 }],
-          {
-            onevent: (event) => {
-              clearTimeout(timer);
-              try {
-                const meta = JSON.parse(event.content);
-                resolve({
-                  displayName: meta.display_name || meta.name || undefined,
-                  picture: meta.picture || undefined,
-                });
-              } catch {
-                resolve(null);
-              }
-              relay.close();
-            },
-            oneose: () => {
-              clearTimeout(timer);
-              relay.close();
-              resolve(null);
-            },
+    const sub = relay
+      .request([{ kinds: [0], authors: [pubkey], limit: 1 }])
+      .subscribe({
+        next: (event) => {
+          clearTimeout(timer);
+          try {
+            const meta = JSON.parse(event.content);
+            resolve({
+              displayName: meta.display_name || meta.name || undefined,
+              picture: meta.picture || undefined,
+            });
+          } catch {
+            resolve(null);
           }
-        );
-      })
-      .catch(() => {
-        clearTimeout(timer);
-        resolve(null);
+          sub.unsubscribe();
+          relay.close();
+        },
+        error: () => {
+          clearTimeout(timer);
+          resolve(null);
+        },
+        complete: () => {
+          clearTimeout(timer);
+          relay.close();
+          resolve(null);
+        },
       });
   });
 }

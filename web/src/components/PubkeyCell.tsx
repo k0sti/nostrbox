@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Relay } from "applesauce-relay";
 import { pubkeyToNpub, compressNpub } from "../lib/nostr";
 
 /** Simple in-memory cache so we don't re-fetch the same pubkey in one session. */
@@ -17,14 +18,13 @@ async function fetchProfileMeta(pubkey: string): Promise<{ name?: string; pictur
   const promise = (async () => {
     for (const url of PROFILE_RELAYS) {
       try {
-        const { Relay } = await import("nostr-tools/relay");
-        const relay = await Relay.connect(url);
+        const relay = new Relay(url);
         const result = await new Promise<{ name?: string; picture?: string }>((resolve) => {
           const timer = setTimeout(() => { relay.close(); resolve({}); }, 3000);
-          relay.subscribe(
-            [{ kinds: [0], authors: [pubkey], limit: 1 }],
-            {
-              onevent: (event) => {
+          const sub = relay
+            .request([{ kinds: [0], authors: [pubkey], limit: 1 }])
+            .subscribe({
+              next: (event) => {
                 clearTimeout(timer);
                 try {
                   const meta = JSON.parse(event.content);
@@ -33,11 +33,19 @@ async function fetchProfileMeta(pubkey: string): Promise<{ name?: string; pictur
                     picture: meta.picture || undefined,
                   });
                 } catch { resolve({}); }
+                sub.unsubscribe();
                 relay.close();
               },
-              oneose: () => { clearTimeout(timer); relay.close(); resolve({}); },
-            }
-          );
+              error: () => {
+                clearTimeout(timer);
+                resolve({});
+              },
+              complete: () => {
+                clearTimeout(timer);
+                relay.close();
+                resolve({});
+              },
+            });
         });
         if (result.name || result.picture) {
           profileCache.set(pubkey, result);

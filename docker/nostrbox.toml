@@ -1,0 +1,15 @@
+# Minimal container config.
+# Override by mounting your own file to /etc/nostrbox/nostrbox.toml.
+
+bind_address = "0.0.0.0:3000"
+db_path = "/data/nostrbox.db"
+web_dist_path = "/app/web/dist"
+relay_port = 7777
+relay_urls = []
+
+# Set this for a stable server identity. If omitted, startup continues without
+# the ContextVM transport identity and the server logs a warning.
+# identity_nsec = "nsec1..."
+
+# Set this when running behind a reverse proxy / public domain.
+# public_url = "https://nostrbox.example.com"

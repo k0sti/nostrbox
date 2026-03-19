@@ -1,4 +1,14 @@
 import type { NostrIdentity } from "../lib/nostr";
+import { useRelay, type RelayStatus } from "../lib/relay-context";
+
+const STATUS_CONFIG: Record<RelayStatus, { label: string; dot: string; className: string; title: string }> = {
+  disconnected: { label: "Offline", dot: "○", className: "relay-badge-off", title: "Relay disconnected" },
+  connecting: { label: "Connecting", dot: "◌", className: "relay-badge-warn", title: "Connecting to relay…" },
+  connected: { label: "No Auth", dot: "●", className: "relay-badge-warn", title: "Connected but not authenticated — NIP-07 extension required" },
+  authenticated: { label: "Relay", dot: "●", className: "relay-badge-ok", title: "Authenticated to relay" },
+  "auth-failed": { label: "Auth Failed", dot: "✕", className: "relay-badge-err", title: "Authentication failed — check NIP-07 extension" },
+  error: { label: "Error", dot: "✕", className: "relay-badge-err", title: "Relay connection error" },
+};
 
 interface TopBarProps {
   identity: NostrIdentity | null;
@@ -15,6 +25,9 @@ export function TopBar({
   onSettingsClick,
   onMenuClick,
 }: TopBarProps) {
+  const { status } = useRelay();
+  const cfg = STATUS_CONFIG[status];
+
   return (
     <header className="topbar">
       <div className="topbar-left">
@@ -43,7 +56,13 @@ export function TopBar({
           </button>
         )}
       </div>
-      <div className="topbar-center">Nostrbox</div>
+      <div className="topbar-center">
+        Nostrbox
+        <span className={`relay-badge ${cfg.className}`} title={cfg.title}>
+          <span className="relay-badge-dot">{cfg.dot}</span>{" "}
+          <span className="relay-badge-label">{cfg.label}</span>
+        </span>
+      </div>
       <div className="topbar-right">
         <button className="settings-btn" onClick={onSettingsClick}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

@@ -3,7 +3,7 @@ use tracing::info;
 
 use nostrbox_store::StorePool;
 
-use crate::policy::NostrboxWritePolicy;
+use crate::policy::{NostrboxWritePolicy, NostrboxQueryPolicy};
 
 /// Configuration for the Nostrbox relay.
 pub struct RelayConfig {
@@ -23,13 +23,18 @@ pub async fn start_relay(
     config: RelayConfig,
     pool: StorePool,
 ) -> Result<LocalRelay, nostr_relay_builder::Error> {
-    let write_policy = NostrboxWritePolicy::new(pool);
+    let write_policy = NostrboxWritePolicy::new(pool.clone());
+    let query_policy = NostrboxQueryPolicy::new(pool);
 
-    let builder = RelayBuilder::default()
+    let relay = LocalRelay::builder()
         .port(config.port)
-        .write_policy(write_policy);
+        .nip42(LocalRelayBuilderNip42::default())
+        .write_policy(write_policy)
+        .query_policy(query_policy)
+        .build()?;
 
-    let relay = LocalRelay::run(builder).await?;
-    info!(url = %relay.url(), "nostrbox relay started");
+    relay.run().await?;
+    let url = relay.url().await;
+    info!(url = %url, "nostrbox relay started");
     Ok(relay)
 }

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::{
     Router,
     extract::State,
-    extract::ws::{WebSocket, WebSocketUpgrade, Message},
+    extract::{FromRequest, ws::{WebSocket, WebSocketUpgrade, Message}},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json},
     routing::{any, get, post},
@@ -133,7 +133,7 @@ async fn main() {
     let relay = start_relay(relay_config, pool.clone())
         .await
         .expect("failed to start relay");
-    let local_relay_url = relay.url();
+    let local_relay_url = relay.url().await.to_string();
     let public_relay_url = config.public_relay_url(&local_relay_url);
     info!(local = %local_relay_url, public = %public_relay_url, "relay running");
 
@@ -179,7 +179,7 @@ async fn main() {
         .route("/health", get(health))
         .route("/api/op", post(handle_operation))
         .route("/api/relay-info", get(relay_info))
-        .route("/ws", get(ws_upgrade))
+        .route("/ws", get(ws_handler))
         .fallback_service(serve_dir)
         .layer(CorsLayer::permissive())
         .with_state(state);
@@ -199,12 +199,30 @@ async fn main() {
 /// If the request is a WebSocket upgrade, proxy to the local relay.
 /// Otherwise, serve NIP-11 relay information document (SDK clients
 /// fetch this via plain HTTP GET on the relay URL).
-/// WebSocket upgrade handler for /ws.
-async fn ws_upgrade(
-    ws: WebSocketUpgrade,
+async fn ws_handler(
+    headers: HeaderMap,
     State(state): State<AppState>,
-) -> impl IntoResponse {
-    ws.on_upgrade(move |client_ws| relay_proxy(client_ws, state.local_relay_url))
+    request: axum::extract::Request,
+) -> axum::response::Response {
+    // Check if this is a WebSocket upgrade request
+    let is_upgrade = headers
+        .get("upgrade")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.eq_ignore_ascii_case("websocket"))
+        .unwrap_or(false);
+
+    if is_upgrade {
+        // Re-extract WebSocketUpgrade from the request
+        let ws = match WebSocketUpgrade::from_request(request, &()).await {
+            Ok(ws) => ws,
+            Err(e) => return e.into_response(),
+        };
+        ws.on_upgrade(move |client_ws| relay_proxy(client_ws, state.local_relay_url))
+            .into_response()
+    } else {
+        // Serve NIP-11 relay info
+        ws_info(headers, State(state)).await.into_response()
+    }
 }
 
 /// NIP-11 relay info for plain GET /ws (no upgrade header).

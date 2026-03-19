@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { nip19 } from "nostr-tools";
+import { decodePointer } from "applesauce-core/helpers/pointers";
 import { ops, type Registration } from "../lib/api";
 
 interface RegisterViewProps {
@@ -11,7 +11,7 @@ function resolveToHex(input: string): string {
   const trimmed = input.trim();
   if (trimmed.startsWith("npub1")) {
     try {
-      const { type, data } = nip19.decode(trimmed);
+      const { type, data } = decodePointer(trimmed);
       if (type === "npub") return data as string;
     } catch {
       // fall through

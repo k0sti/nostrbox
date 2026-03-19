@@ -37,7 +37,7 @@ tower-http = { version = "0.6", features = ["cors", "fs"] }
 
 # Nostr
 nostr-sdk = { version = "0.43", features = ["nip59"] }
-nostr-relay-builder = "0.43"
+nostr-relay-builder = { path = "../nostr-1/crates/nostr-relay-builder" }
 nostr-database = "0.43"
 
 # ContextVM

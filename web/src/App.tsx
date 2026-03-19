@@ -11,10 +11,12 @@ import { RegistrationsView } from "./views/RegistrationsView";
 import { ActorsView } from "./views/ActorsView";
 import { GroupsView } from "./views/GroupsView";
 import { RelaysView } from "./views/RelaysView";
+import { EventsView } from "./views/EventsView";
 import { loginWithExtension, loginWithAmber, loginWithNostrConnect, disconnectNostrConnect, fetchProfile, type NostrIdentity } from "./lib/nostr";
 import { connectTransport, disconnectTransport } from "./lib/contextvm";
 import { ops, setCurrentCaller } from "./lib/api";
 import { loadSettings } from "./lib/settings";
+import { RelayProvider } from "./lib/relay-context";
 
 type Modal = "login" | "profile" | "relay" | null;
 
@@ -150,10 +152,13 @@ function App() {
         return <GroupsView />;
       case "relays":
         return <RelaysView />;
+      case "events":
+        return <EventsView />;
     }
   };
 
   return (
+    <RelayProvider>
     <div className="app-layout">
       <TopBar
         identity={identity}
@@ -187,6 +192,7 @@ function App() {
       )}
       {modal === "relay" && <RelayPanel onClose={() => setModal(null)} />}
     </div>
+    </RelayProvider>
   );
 }
 
