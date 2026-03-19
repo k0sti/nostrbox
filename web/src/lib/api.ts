@@ -158,4 +158,16 @@ export const ops = {
     callOp("group.add_member", { group_id: groupId, pubkey, role }),
   groupRemoveMember: (groupId: string, pubkey: string) =>
     callOp("group.remove_member", { group_id: groupId, pubkey }),
+
+  // Email login operations
+  emailRegister: (npub: string, ncryptsec: string, email: string) =>
+    callOp<{ status: string }>("email.register", { npub, ncryptsec, email }),
+  emailLogin: (email: string) =>
+    callOp<{ status: string }>("email.login", { email }),
+  emailRedeem: (token: string) =>
+    callOp<{ npub: string; ncryptsec: string }>("email.redeem", { token }),
+  emailClear: () =>
+    callOp<{ status: string }>("email.clear"),
+  emailChangePassword: (ncryptsec: string) =>
+    callOp<{ status: string }>("email.change_password", { ncryptsec }),
 };

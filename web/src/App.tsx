@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import "./App.css";
 import { TopBar } from "./components/TopBar";
 import { LeftNav, type View } from "./components/LeftNav";
-import { LoginModal } from "./components/LoginModal";
+import { LoginModal, PasswordDecryptModal } from "./components/LoginModal";
 import { ProfilePanel } from "./components/ProfilePanel";
 import { RelayPanel } from "./components/RelayPanel";
 import { DashboardView } from "./views/DashboardView";
@@ -17,31 +17,37 @@ import { connectTransport, disconnectTransport } from "./lib/contextvm";
 import { ops, setCurrentCaller } from "./lib/api";
 import { loadSettings } from "./lib/settings";
 import { RelayProvider } from "./lib/relay-context";
+import { setLoginMethod, type LoginMethod } from "./lib/signer";
+import { clearStoredNsec, getStoredNsec } from "./lib/nip49";
 
-type Modal = "login" | "profile" | "relay" | null;
+type Modal = "login" | "profile" | "relay" | "password-decrypt" | null;
 
 const ADMIN_ROLES = ["admin", "owner"];
 const MEMBER_ROLES = ["member", "admin", "owner"];
 const STORAGE_KEY = "nostrbox_identity";
+const LOGIN_METHOD_KEY = "nostrbox_login_method";
 
 /** Save minimal identity to localStorage (pubkey + npub only — role/profile refetched). */
-function saveIdentity(id: NostrIdentity | null) {
+function saveIdentity(id: NostrIdentity | null, method?: LoginMethod) {
   if (id) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ pubkey: id.pubkey, npub: id.npub }));
+    if (method) localStorage.setItem(LOGIN_METHOD_KEY, method);
   } else {
     localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(LOGIN_METHOD_KEY);
   }
 }
 
 /** Load saved identity from localStorage. */
-function loadIdentity(): NostrIdentity | null {
+function loadIdentity(): { identity: NostrIdentity | null; method: LoginMethod | null } {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
+    if (!raw) return { identity: null, method: null };
     const { pubkey, npub } = JSON.parse(raw);
-    if (pubkey && npub) return { pubkey, npub };
+    const method = localStorage.getItem(LOGIN_METHOD_KEY) as LoginMethod | null;
+    if (pubkey && npub) return { identity: { pubkey, npub }, method };
   } catch { /* ignore corrupt data */ }
-  return null;
+  return { identity: null, method: null };
 }
 
 function App() {
@@ -50,14 +56,43 @@ function App() {
   const [identity, setIdentity] = useState<NostrIdentity | null>(null);
   const [navOpen, setNavOpen] = useState(false);
 
+  // Magic link redemption data (token redeemed, waiting for password)
+  const [redeemData, setRedeemData] = useState<{ npub: string; ncryptsec: string } | null>(null);
+
   const role = identity?.role;
   const isAdmin = !!role && ADMIN_ROLES.includes(role);
   const isMember = !!role && MEMBER_ROLES.includes(role);
 
+  // Handle magic link token on mount
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get("token");
+    if (token) {
+      // Clean URL
+      window.history.replaceState({}, "", window.location.pathname);
+      // Redeem the token
+      ops.emailRedeem(token).then((res) => {
+        if (res.ok && res.data) {
+          setRedeemData(res.data);
+          setModal("password-decrypt");
+        } else {
+          console.error("Token redemption failed:", res.error);
+        }
+      });
+    }
+  }, []);
+
   // Restore session on mount
   useEffect(() => {
-    const saved = loadIdentity();
+    const { identity: saved, method } = loadIdentity();
     if (saved) {
+      if (method) setLoginMethod(method);
+      // For email login, check if nsec is still in sessionStorage
+      if (method === "email" && !getStoredNsec()) {
+        // Session expired — clear saved identity
+        saveIdentity(null);
+        return;
+      }
       hydrateIdentity(saved);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -102,28 +137,37 @@ function App() {
     });
   };
 
-  const onLogin = async (id: NostrIdentity) => {
-    saveIdentity(id);
+  const onLogin = async (id: NostrIdentity, method: LoginMethod = "extension") => {
+    setLoginMethod(method);
+    saveIdentity(id, method);
     setModal(null);
     hydrateIdentity(id);
   };
 
   const handleLoginExtension = async () => {
     const id = await loginWithExtension();
-    if (id) onLogin(id);
+    if (id) onLogin(id, "extension");
   };
 
   const handleLoginAmber = async () => {
     const id = await loginWithAmber();
-    if (id) onLogin(id);
+    if (id) onLogin(id, "amber");
   };
 
   const handleLoginNostrConnect = async (bunkerUrl: string) => {
     const id = await loginWithNostrConnect(bunkerUrl);
-    if (id) onLogin(id);
+    if (id) onLogin(id, "nostr-connect");
+  };
+
+  const handleEmailLogin = (pubkey: string, npub: string, _nsecHex: string) => {
+    const id: NostrIdentity = { pubkey, npub };
+    onLogin(id, "email");
+    setRedeemData(null);
   };
 
   const handleLogout = () => {
+    clearStoredNsec();
+    setLoginMethod(null);
     saveIdentity(null);
     setIdentity(null);
     setModal(null);
@@ -181,6 +225,14 @@ function App() {
           onLoginExtension={handleLoginExtension}
           onLoginAmber={handleLoginAmber}
           onLoginNostrConnect={handleLoginNostrConnect}
+          onEmailLogin={handleEmailLogin}
+        />
+      )}
+      {modal === "password-decrypt" && redeemData && (
+        <PasswordDecryptModal
+          redeemData={redeemData}
+          onDecrypt={handleEmailLogin}
+          onClose={() => { setModal(null); setRedeemData(null); }}
         />
       )}
       {modal === "profile" && identity && (
