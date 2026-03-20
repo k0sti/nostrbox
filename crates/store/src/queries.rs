@@ -458,6 +458,18 @@ impl Store {
         Ok(changed > 0)
     }
 
+    pub fn update_email_ncryptsec_by_pubkey(
+        &self,
+        pubkey: &str,
+        ncryptsec: &str,
+    ) -> Result<bool, rusqlite::Error> {
+        let changed = self.conn().execute(
+            "UPDATE email_identities SET ncryptsec = ?1 WHERE pubkey = ?2",
+            params![ncryptsec, pubkey],
+        )?;
+        Ok(changed > 0)
+    }
+
     pub fn clear_email_ncryptsec_by_pubkey(&self, pubkey: &str) -> Result<u64, rusqlite::Error> {
         let changed = self.conn().execute(
             "UPDATE email_identities SET ncryptsec = NULL WHERE pubkey = ?1",

@@ -618,19 +618,13 @@ impl<'a> OperationHandler<'a> {
     }
 
     /// Update ncryptsec after client-side re-encryption with new password.
-    /// Params: { email, ncryptsec }
-    /// Authenticated: caller must own the email identity.
+    /// Params: { ncryptsec }
+    /// Authenticated: caller must own an email identity.
     fn email_change_password(&self, req: &OperationRequest) -> OperationResponse {
         let Some(caller) = &req.caller else {
             return OperationResponse::error_with_code(
                 ErrorCode::Unauthorized,
                 "authentication required",
-            );
-        };
-        let Some(raw_email) = req.params.get("email").and_then(|v| v.as_str()) else {
-            return OperationResponse::error_with_code(
-                ErrorCode::ValidationError,
-                "missing param: email",
             );
         };
         let Some(ncryptsec) = req.params.get("ncryptsec").and_then(|v| v.as_str()) else {
@@ -640,33 +634,11 @@ impl<'a> OperationHandler<'a> {
             );
         };
 
-        let email_addr = raw_email.trim().to_lowercase();
-
-        // Verify the caller owns this email identity
-        match self.store.get_email_identity(&email_addr) {
-            Ok(Some(identity)) => {
-                let owner = identity["pubkey"].as_str().unwrap_or_default();
-                if owner != caller {
-                    return OperationResponse::error_with_code(
-                        ErrorCode::Forbidden,
-                        "email does not belong to caller",
-                    );
-                }
-            }
-            Ok(None) => {
-                return OperationResponse::error_with_code(
-                    ErrorCode::NotFound,
-                    "email identity not found",
-                );
-            }
-            Err(e) => return OperationResponse::error(e.to_string()),
-        }
-
-        match self.store.update_email_ncryptsec(&email_addr, caller, ncryptsec) {
+        match self.store.update_email_ncryptsec_by_pubkey(caller, ncryptsec) {
             Ok(true) => OperationResponse::success(serde_json::json!({"status": "updated"})),
             Ok(false) => OperationResponse::error_with_code(
                 ErrorCode::NotFound,
-                "email identity not found",
+                "no email identity found for caller",
             ),
             Err(e) => OperationResponse::error(e.to_string()),
         }

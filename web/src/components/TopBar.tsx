@@ -56,7 +56,7 @@ export function TopBar({
                 </svg>
               )}
             </button>
-            <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13, color: "var(--text)", marginLeft: 4, minWidth: 0 }}>
+            <span style={{ display: "flex", flexDirection: "column", justifyContent: "center", fontSize: 13, color: "var(--text)", marginLeft: 4, minWidth: 0, lineHeight: 1.2 }}>
               <span style={{ fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 120 }}>
                 {identity.displayName || "Anonymous"}
               </span>
