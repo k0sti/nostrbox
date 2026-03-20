@@ -137,6 +137,33 @@ async fn main() {
     // Open store pool (4 connections, WAL mode for concurrent reads)
     let pool = StorePool::open(&config.db_path, 4).expect("failed to open store pool");
 
+    // Ensure the server's own pubkey is registered as a system actor (owner role)
+    if let Some(ref keys) = keys {
+        let server_pubkey = keys.public_key().to_hex();
+        let server_npub = keys.public_key().to_bech32().unwrap_or_default();
+        let store = pool.get().expect("failed to get store connection for server actor");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let actor = nostrbox_core::Actor {
+            pubkey: server_pubkey.clone(),
+            npub: server_npub,
+            kind: nostrbox_core::ActorKind::System,
+            global_role: nostrbox_core::GlobalRole::Owner,
+            status: nostrbox_core::ActorStatus::Active,
+            display_name: Some("nostrbox".into()),
+            groups: vec![],
+            created_at: now,
+            updated_at: now,
+        };
+        if let Err(e) = store.upsert_actor(&actor) {
+            tracing::error!("failed to register server actor: {e}");
+        } else {
+            info!(pubkey = %server_pubkey, "server system actor registered");
+        }
+    }
+
     // Start relay
     let relay_config = RelayConfig {
         port: config.relay_port,

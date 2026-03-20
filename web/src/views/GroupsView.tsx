@@ -6,6 +6,7 @@ export function GroupsView() {
   const [groups, setGroups] = useState<Group[]>([]);
   const [selected, setSelected] = useState<Group | null>(null);
   const [showCreate, setShowCreate] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [form, setForm] = useState({ group_id: "", name: "", description: "", visibility: "group" });
 
   const load = () => {
@@ -105,6 +106,7 @@ export function GroupsView() {
                   <th>Policy</th>
                   <th>Status</th>
                   <th>Members</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -128,6 +130,23 @@ export function GroupsView() {
                       <span className={`badge badge-${g.status}`}>{g.status}</span>
                     </td>
                     <td>{g.members.length}</td>
+                    <td>
+                      <button
+                        className="btn-action btn-danger"
+                        style={{ fontSize: 11, padding: "3px 8px" }}
+                        disabled={deletingId === g.group_id}
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          if (!confirm(`Delete group ${g.name}?`)) return;
+                          setDeletingId(g.group_id);
+                          const res = await ops.groupDelete(g.group_id);
+                          if (res.ok) load();
+                          setDeletingId(null);
+                        }}
+                      >
+                        {deletingId === g.group_id ? "..." : "Delete"}
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>

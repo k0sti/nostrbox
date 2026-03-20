@@ -87,13 +87,16 @@ impl<'a> OperationHandler<'a> {
             "registration.get" => self.registration_get(req),
             "registration.approve" => self.registration_approve(req),
             "registration.deny" => self.registration_deny(req),
+            "registration.delete" => self.registration_delete(req),
             "actor.list" => self.actor_list(),
             "actor.get" => self.actor_get(req),
+            "actor.delete" => self.actor_delete(req),
             "actor.detail" => self.actor_detail(req),
             "group.list" => self.group_list(),
             "group.get" => self.group_get(req),
             "group.put" => self.group_put(req),
             "group.add_member" => self.group_add_member(req),
+            "group.delete" => self.group_delete(req),
             "group.remove_member" => self.group_remove_member(req),
             "dashboard.get" => self.dashboard_get(),
             "email.register" => self.email_register(req),
@@ -238,6 +241,26 @@ impl<'a> OperationHandler<'a> {
         }
     }
 
+    fn registration_delete(&self, req: &OperationRequest) -> OperationResponse {
+        if let Some(err) = self.require_admin(req) {
+            return err;
+        }
+        let Some(pubkey) = req.params.get("pubkey").and_then(|v| v.as_str()) else {
+            return OperationResponse::error_with_code(
+                ErrorCode::ValidationError,
+                "missing param: pubkey",
+            );
+        };
+        match self.store.delete_registration(pubkey) {
+            Ok(true) => OperationResponse::success(serde_json::json!({"deleted": true})),
+            Ok(false) => OperationResponse::error_with_code(
+                ErrorCode::NotFound,
+                "registration not found",
+            ),
+            Err(e) => OperationResponse::error(e.to_string()),
+        }
+    }
+
     fn registration_deny(&self, req: &OperationRequest) -> OperationResponse {
         if let Some(err) = self.require_admin(req) {
             return err;
@@ -307,6 +330,26 @@ impl<'a> OperationHandler<'a> {
         }
     }
 
+    fn actor_delete(&self, req: &OperationRequest) -> OperationResponse {
+        if let Some(err) = self.require_admin(req) {
+            return err;
+        }
+        let Some(pubkey) = req.params.get("pubkey").and_then(|v| v.as_str()) else {
+            return OperationResponse::error_with_code(
+                ErrorCode::ValidationError,
+                "missing param: pubkey",
+            );
+        };
+        match self.store.delete_actor(pubkey) {
+            Ok(true) => OperationResponse::success(serde_json::json!({"deleted": true})),
+            Ok(false) => OperationResponse::error_with_code(
+                ErrorCode::NotFound,
+                "actor not found",
+            ),
+            Err(e) => OperationResponse::error(e.to_string()),
+        }
+    }
+
     // ── Group operations ───────────────────────────────────────────
 
     fn group_list(&self) -> OperationResponse {
@@ -328,6 +371,26 @@ impl<'a> OperationHandler<'a> {
             Ok(None) => {
                 OperationResponse::error_with_code(ErrorCode::NotFound, "group not found")
             }
+            Err(e) => OperationResponse::error(e.to_string()),
+        }
+    }
+
+    fn group_delete(&self, req: &OperationRequest) -> OperationResponse {
+        if let Some(err) = self.require_admin(req) {
+            return err;
+        }
+        let Some(group_id) = req.params.get("group_id").and_then(|v| v.as_str()) else {
+            return OperationResponse::error_with_code(
+                ErrorCode::ValidationError,
+                "missing param: group_id",
+            );
+        };
+        match self.store.delete_group(group_id) {
+            Ok(true) => OperationResponse::success(serde_json::json!({"deleted": true})),
+            Ok(false) => OperationResponse::error_with_code(
+                ErrorCode::NotFound,
+                "group not found",
+            ),
             Err(e) => OperationResponse::error(e.to_string()),
         }
     }

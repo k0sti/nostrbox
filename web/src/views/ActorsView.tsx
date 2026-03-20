@@ -5,12 +5,15 @@ import { PubkeyCell } from "../components/PubkeyCell";
 export function ActorsView() {
   const [actors, setActors] = useState<Actor[]>([]);
   const [selected, setSelected] = useState<ActorDetail | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  useEffect(() => {
+  const load = () => {
     ops.actorList().then((res) => {
       if (res.ok && res.data) setActors(res.data);
     });
-  }, []);
+  };
+
+  useEffect(() => { load(); }, []);
 
   const handleSelect = async (pubkey: string) => {
     const res = await ops.actorDetail(pubkey);
@@ -19,11 +22,11 @@ export function ActorsView() {
 
   return (
     <div>
-      <h1>Actors</h1>
+      <h1>Identities</h1>
       <div style={{ display: "flex", gap: 24 }}>
         <div style={{ flex: 1 }}>
           {actors.length === 0 ? (
-            <div className="card">No actors registered yet.</div>
+            <div className="card">No identities registered yet.</div>
           ) : (
             <table className="data-table">
               <thead>
@@ -33,6 +36,7 @@ export function ActorsView() {
                   <th>Role</th>
                   <th>Status</th>
                   <th>Groups</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -63,6 +67,23 @@ export function ActorsView() {
                       </span>
                     </td>
                     <td>{a.groups.length}</td>
+                    <td>
+                      <button
+                        className="btn-action btn-danger"
+                        style={{ fontSize: 11, padding: "3px 8px" }}
+                        disabled={deletingId === a.pubkey}
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          if (!confirm(`Delete identity ${a.npub}? This removes the actor and all associated data.`)) return;
+                          setDeletingId(a.pubkey);
+                          const res = await ops.actorDelete(a.pubkey);
+                          if (res.ok) load();
+                          setDeletingId(null);
+                        }}
+                      >
+                        {deletingId === a.pubkey ? "..." : "Delete"}
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -73,7 +94,7 @@ export function ActorsView() {
         {selected && (
           <div className="detail-panel">
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-              <h2 style={{ fontSize: 18, color: "var(--text-heading)" }}>Actor Detail</h2>
+              <h2 style={{ fontSize: 18, color: "var(--text-heading)" }}>Identity Detail</h2>
               <button className="modal-close" style={{ width: "auto", padding: "4px 12px" }} onClick={() => setSelected(null)}>
                 Close
               </button>

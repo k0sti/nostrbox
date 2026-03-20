@@ -312,6 +312,58 @@ impl Store {
         rows.collect()
     }
 
+    pub fn delete_actor(&self, pubkey: &str) -> Result<bool, rusqlite::Error> {
+        // Cascade: delete email_identities, login_tokens (via email), and group_members
+        // First collect emails for this pubkey so we can delete their login_tokens
+        let emails: Vec<String> = {
+            let mut stmt = self
+                .conn()
+                .prepare("SELECT email FROM email_identities WHERE pubkey = ?1")?;
+            let rows = stmt.query_map(params![pubkey], |row| row.get::<_, String>(0))?;
+            rows.collect::<Result<_, _>>()?
+        };
+        for email in &emails {
+            self.conn().execute(
+                "DELETE FROM login_tokens WHERE email = ?1",
+                params![email],
+            )?;
+        }
+        self.conn().execute(
+            "DELETE FROM email_identities WHERE pubkey = ?1",
+            params![pubkey],
+        )?;
+        self.conn().execute(
+            "DELETE FROM group_members WHERE pubkey = ?1",
+            params![pubkey],
+        )?;
+        let deleted = self.conn().execute(
+            "DELETE FROM actors WHERE pubkey = ?1",
+            params![pubkey],
+        )?;
+        Ok(deleted > 0)
+    }
+
+    pub fn delete_registration(&self, pubkey: &str) -> Result<bool, rusqlite::Error> {
+        let deleted = self.conn().execute(
+            "DELETE FROM registrations WHERE pubkey = ?1",
+            params![pubkey],
+        )?;
+        Ok(deleted > 0)
+    }
+
+    pub fn delete_group(&self, group_id: &str) -> Result<bool, rusqlite::Error> {
+        // Cascade: delete group_members
+        self.conn().execute(
+            "DELETE FROM group_members WHERE group_id = ?1",
+            params![group_id],
+        )?;
+        let deleted = self.conn().execute(
+            "DELETE FROM groups WHERE group_id = ?1",
+            params![group_id],
+        )?;
+        Ok(deleted > 0)
+    }
+
     // ── Dashboard ──────────────────────────────────────────────────
 
     pub fn count_pending_registrations(&self) -> Result<u64, rusqlite::Error> {

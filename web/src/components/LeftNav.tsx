@@ -25,7 +25,7 @@ const NAV_ITEMS: NavItem[] = [
   { view: "dashboard", icon: "📊", label: "Dashboard" },
   { view: "register", icon: "📋", label: "Register", publicOnly: true },
   { view: "registrations", icon: "📝", label: "Registrations", requiresAdmin: true },
-  { view: "actors", icon: "👥", label: "Actors", requiresAdmin: true },
+  { view: "actors", icon: "👥", label: "Identities", requiresAdmin: true },
   { view: "email-accounts", icon: "📧", label: "Email Accounts", requiresAdmin: true },
   { view: "groups", icon: "📁", label: "Groups", requiresMember: true },
   { view: "agents", icon: "🤖", label: "Agents", requiresMember: true },

@@ -184,4 +184,9 @@ export const ops = {
     callOp<{ status: string }>("email.change_password", { ncryptsec }),
   emailList: () => callOp<EmailIdentity[]>("email.list"),
   emailDelete: (id: number) => callOp<{ deleted: boolean }>("email.delete", { id }),
+
+  // Delete operations
+  actorDelete: (pubkey: string) => callOp<{ deleted: boolean }>("actor.delete", { pubkey }),
+  registrationDelete: (pubkey: string) => callOp<{ deleted: boolean }>("registration.delete", { pubkey }),
+  groupDelete: (groupId: string) => callOp<{ deleted: boolean }>("group.delete", { group_id: groupId }),
 };

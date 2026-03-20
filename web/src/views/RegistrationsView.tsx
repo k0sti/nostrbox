@@ -4,6 +4,7 @@ import { PubkeyCell } from "../components/PubkeyCell";
 
 export function RegistrationsView() {
   const [regs, setRegs] = useState<Registration[]>([]);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const load = () => {
     ops.registrationList().then((res) => {
@@ -49,22 +50,38 @@ export function RegistrationsView() {
                   </span>
                 </td>
                 <td>
-                  {r.status === "pending" && (
-                    <div style={{ display: "flex", gap: 6 }}>
-                      <button
-                        className="btn-action"
-                        onClick={() => handleApprove(r.pubkey)}
-                      >
-                        Approve
-                      </button>
-                      <button
-                        className="btn-action btn-danger"
-                        onClick={() => handleDeny(r.pubkey)}
-                      >
-                        Deny
-                      </button>
-                    </div>
-                  )}
+                  <div style={{ display: "flex", gap: 6 }}>
+                    {r.status === "pending" && (
+                      <>
+                        <button
+                          className="btn-action"
+                          onClick={() => handleApprove(r.pubkey)}
+                        >
+                          Approve
+                        </button>
+                        <button
+                          className="btn-action btn-danger"
+                          onClick={() => handleDeny(r.pubkey)}
+                        >
+                          Deny
+                        </button>
+                      </>
+                    )}
+                    <button
+                      className="btn-action btn-danger"
+                      style={{ fontSize: 11, padding: "3px 8px" }}
+                      disabled={deletingId === r.pubkey}
+                      onClick={async () => {
+                        if (!confirm(`Delete registration for ${r.pubkey.slice(0, 12)}...?`)) return;
+                        setDeletingId(r.pubkey);
+                        const res = await ops.registrationDelete(r.pubkey);
+                        if (res.ok) load();
+                        setDeletingId(null);
+                      }}
+                    >
+                      {deletingId === r.pubkey ? "..." : "Delete"}
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}
