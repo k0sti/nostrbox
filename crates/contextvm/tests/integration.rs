@@ -745,7 +745,6 @@ fn email_change_password_success() {
     let resp = handler.handle(&req(
         "email.change_password",
         json!({
-            "email": "changepw@example.com",
             "ncryptsec": "ncryptsec1new_password"
         }),
         Some(TEST_HEX),
@@ -773,17 +772,16 @@ fn email_change_password_wrong_owner() {
         None,
     ));
 
-    // Try to change password as a different pubkey
+    // Try to change password as a different pubkey — no identity found for them
     let resp = handler.handle(&req(
         "email.change_password",
         json!({
-            "email": "owned@example.com",
             "ncryptsec": "ncryptsec1hacked"
         }),
         Some("different_pubkey"),
     ));
     assert!(!resp.ok);
-    assert_eq!(resp.error_code.as_deref(), Some("forbidden"));
+    assert_eq!(resp.error_code.as_deref(), Some("not_found"));
 }
 
 #[test]
