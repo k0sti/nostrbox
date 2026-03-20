@@ -1,6 +1,6 @@
 import type { NostrIdentity } from "../lib/nostr";
 
-export type View = "dashboard" | "register" | "registrations" | "actors" | "groups" | "relays" | "events";
+export type View = "dashboard" | "register" | "registrations" | "actors" | "email-accounts" | "groups" | "agents" | "relays" | "events";
 
 interface LeftNavProps {
   active: View;
@@ -26,7 +26,9 @@ const NAV_ITEMS: NavItem[] = [
   { view: "register", icon: "📋", label: "Register", publicOnly: true },
   { view: "registrations", icon: "📝", label: "Registrations", requiresAdmin: true },
   { view: "actors", icon: "👥", label: "Actors", requiresAdmin: true },
+  { view: "email-accounts", icon: "📧", label: "Email Accounts", requiresAdmin: true },
   { view: "groups", icon: "📁", label: "Groups", requiresMember: true },
+  { view: "agents", icon: "🤖", label: "Agents", requiresMember: true },
   { view: "relays", icon: "🔌", label: "Relays", requiresMember: true },
   { view: "events", icon: "📡", label: "Events", requiresMember: true },
 ];

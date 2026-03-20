@@ -88,8 +88,8 @@ export function RelayPanel({ onClose }: RelayPanelProps) {
   })();
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+    <div className="modal-overlay" onMouseDown={onClose}>
+      <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
         <h2>Settings</h2>
 
         {/* Active transport indicator */}

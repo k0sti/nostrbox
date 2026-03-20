@@ -125,6 +125,18 @@ export interface RelayInfo {
   version?: string;
 }
 
+export interface EmailIdentity {
+  id: number;
+  email: string;
+  pubkey: string;
+  has_key: boolean;
+  created_at: number;
+  last_login_at: number | null;
+  npub: string | null;
+  display_name: string | null;
+  global_role: string | null;
+}
+
 export async function fetchRelayInfo(): Promise<RelayInfo | null> {
   try {
     const res = await fetch(`${API_BASE}/api/relay-info`, {
@@ -170,4 +182,6 @@ export const ops = {
     callOp<{ status: string }>("email.clear"),
   emailChangePassword: (ncryptsec: string) =>
     callOp<{ status: string }>("email.change_password", { ncryptsec }),
+  emailList: () => callOp<EmailIdentity[]>("email.list"),
+  emailDelete: (id: number) => callOp<{ deleted: boolean }>("email.delete", { id }),
 };

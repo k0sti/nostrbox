@@ -4,7 +4,7 @@ use nostrbox_core::{
     Actor, ActorKind, ActorStatus, GlobalRole, Group, GroupId, GroupMember, GroupRole, GroupStatus,
     JoinPolicy, Pubkey, Registration, RegistrationStatus, Visibility,
 };
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 
 use crate::Store;
 
@@ -488,6 +488,50 @@ impl Store {
         Ok(deleted)
     }
 
+    pub fn list_email_identities(&self) -> Result<Vec<serde_json::Value>, rusqlite::Error> {
+        let mut stmt = self.conn().prepare(
+            "SELECT ei.id, ei.email, ei.pubkey, ei.ncryptsec IS NOT NULL as has_key, ei.created_at, ei.last_login_at,
+                    a.npub, a.display_name, a.global_role
+             FROM email_identities ei
+             LEFT JOIN actors a ON a.pubkey = ei.pubkey
+             ORDER BY ei.id DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(serde_json::json!({
+                "id": row.get::<_, i64>(0)?,
+                "email": row.get::<_, String>(1)?,
+                "pubkey": row.get::<_, String>(2)?,
+                "has_key": row.get::<_, bool>(3)?,
+                "created_at": row.get::<_, u64>(4)?,
+                "last_login_at": row.get::<_, Option<u64>>(5)?,
+                "npub": row.get::<_, Option<String>>(6)?,
+                "display_name": row.get::<_, Option<String>>(7)?,
+                "global_role": row.get::<_, Option<String>>(8)?,
+            }))
+        })?;
+        rows.collect()
+    }
+
+    pub fn delete_email_identity(&self, id: i64) -> Result<bool, rusqlite::Error> {
+        // First get the email so we can cascade delete tokens
+        let email: Option<String> = self.conn().query_row(
+            "SELECT email FROM email_identities WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        ).optional()?;
+
+        if let Some(email) = email {
+            self.delete_login_tokens_by_email(&email)?;
+            let deleted = self.conn().execute(
+                "DELETE FROM email_identities WHERE id = ?1",
+                params![id],
+            )?;
+            Ok(deleted > 0)
+        } else {
+            Ok(false)
+        }
+    }
+
     // ── Login Tokens ────────────────────────────────────────────────
 
     pub fn create_login_token(
@@ -521,7 +565,18 @@ impl Store {
             .conn()
             .prepare("SELECT email FROM login_tokens WHERE token = ?1")?;
         let mut rows = stmt.query_map(params![token], |row| row.get::<_, String>(0))?;
-        rows.next().transpose()
+        let email = rows.next().transpose()?;
+
+        // Update last_login_at for the email identity
+        if let Some(ref email_addr) = email {
+            let now = now_timestamp();
+            let _ = self.conn().execute(
+                "UPDATE email_identities SET last_login_at = ?1 WHERE email = ?2",
+                params![now, email_addr],
+            );
+        }
+
+        Ok(email)
     }
 
     /// Count unexpired login tokens for a given email (for rate limiting).
@@ -553,6 +608,56 @@ impl Store {
             params![email],
         )?;
         Ok(())
+    }
+
+    // ── Relay Audit Log ─────────────────────────────────────────────
+
+    /// Log a denied relay request.
+    pub fn log_relay_denial(
+        &self,
+        pubkey: Option<&str>,
+        kind: Option<u16>,
+        action: &str,
+        role: &str,
+        reason: &str,
+        ip_addr: Option<&str>,
+    ) -> Result<(), rusqlite::Error> {
+        let now = now_timestamp();
+        self.conn().execute(
+            "INSERT INTO relay_audit_log (timestamp, pubkey, kind, action, role, reason, ip_addr) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![now, pubkey, kind, action, role, reason, ip_addr],
+        )?;
+        Ok(())
+    }
+
+    /// Get recent audit log entries (newest first).
+    pub fn get_relay_audit_log(&self, limit: u32) -> Result<serde_json::Value, rusqlite::Error> {
+        let mut stmt = self.conn().prepare(
+            "SELECT id, timestamp, pubkey, kind, action, role, reason, ip_addr FROM relay_audit_log ORDER BY id DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map([limit], |row| {
+            Ok(serde_json::json!({
+                "id": row.get::<_, i64>(0)?,
+                "timestamp": row.get::<_, i64>(1)?,
+                "pubkey": row.get::<_, Option<String>>(2)?,
+                "kind": row.get::<_, Option<i64>>(3)?,
+                "action": row.get::<_, String>(4)?,
+                "role": row.get::<_, String>(5)?,
+                "reason": row.get::<_, String>(6)?,
+                "ip_addr": row.get::<_, Option<String>>(7)?,
+            }))
+        })?;
+        let entries: Vec<serde_json::Value> = rows.filter_map(|r| r.ok()).collect();
+        Ok(serde_json::Value::Array(entries))
+    }
+
+    /// Delete audit log entries older than the given number of seconds.
+    pub fn cleanup_relay_audit_log(&self, max_age_secs: u64) -> Result<usize, rusqlite::Error> {
+        let cutoff = now_timestamp().saturating_sub(max_age_secs);
+        self.conn().execute(
+            "DELETE FROM relay_audit_log WHERE timestamp < ?1",
+            [cutoff],
+        )
     }
 
     // ── Events ──────────────────────────────────────────────────────

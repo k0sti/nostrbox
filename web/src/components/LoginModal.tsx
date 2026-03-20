@@ -27,7 +27,7 @@ export function LoginModal({
 
   // Email flow state
   const [emailStep, setEmailStep] = useState<EmailStep>("initial");
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(() => localStorage.getItem("nostrbox_email") || "");
   const [password, setPassword] = useState("");
   const [passwordConfirm, setPasswordConfirm] = useState("");
   const [generatedKeys, setGeneratedKeys] = useState<{ nsec: string; pubkey: string; npub: string } | null>(null);
@@ -70,6 +70,7 @@ export function LoginModal({
       const res = await ops.emailRegister(generatedKeys.npub, ncryptsec, email.trim().toLowerCase());
       if (res.ok) {
         // Auto-login after registration — store nsec and proceed
+        localStorage.setItem("nostrbox_email", email.trim().toLowerCase());
         storeNsec(generatedKeys.nsec);
         onEmailLogin(generatedKeys.pubkey, generatedKeys.npub, generatedKeys.nsec);
       } else {
@@ -92,6 +93,7 @@ export function LoginModal({
     try {
       const res = await ops.emailLogin(email.trim().toLowerCase());
       if (res.ok) {
+        localStorage.setItem("nostrbox_email", email.trim().toLowerCase());
         setEmailStep("check-email");
       } else {
         setError(res.error || "Failed to send login email");
@@ -126,8 +128,8 @@ export function LoginModal({
   // ── Email Registration Form ──
   if (emailStep === "register") {
     return (
-      <div className="modal-overlay" onClick={onClose}>
-        <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 440 }}>
+      <div className="modal-overlay" onMouseDown={onClose}>
+        <div className="modal" onMouseDown={(e) => e.stopPropagation()} style={{ maxWidth: 440 }}>
           <h2>Register with Email</h2>
           <p style={{ color: "var(--text-muted)", fontSize: 13, marginBottom: 16 }}>
             Generate a Nostr keypair, protect it with a password, and register with your email.
@@ -205,8 +207,8 @@ export function LoginModal({
   // ── Email Login Form ──
   if (emailStep === "login") {
     return (
-      <div className="modal-overlay" onClick={onClose}>
-        <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-overlay" onMouseDown={onClose}>
+        <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
           <h2>Login with Email</h2>
           <form onSubmit={handleEmailLoginSubmit}>
             <div className="form-field" style={{ marginBottom: 12 }}>
@@ -235,8 +237,8 @@ export function LoginModal({
   // ── Check Your Email ──
   if (emailStep === "check-email") {
     return (
-      <div className="modal-overlay" onClick={onClose}>
-        <div className="modal" onClick={(e) => e.stopPropagation()} style={{ textAlign: "center" }}>
+      <div className="modal-overlay" onMouseDown={onClose}>
+        <div className="modal" onMouseDown={(e) => e.stopPropagation()} style={{ textAlign: "center" }}>
           <h2>Check Your Email</h2>
           <p style={{ color: "var(--text-muted)", fontSize: 14, marginBottom: 16 }}>
             If an account exists for that email, we've sent a login link. Click it to continue.
@@ -255,8 +257,8 @@ export function LoginModal({
   // ── Password Decrypt (after magic link redeem) ──
   if (emailStep === "password-decrypt" && redeemData) {
     return (
-      <div className="modal-overlay" onClick={onClose}>
-        <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-overlay" onMouseDown={onClose}>
+        <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
           <h2>Enter Password</h2>
           <p style={{ color: "var(--text-muted)", fontSize: 13, marginBottom: 16 }}>
             Enter your password to decrypt your private key.
@@ -288,8 +290,8 @@ export function LoginModal({
 
   // ── Initial Login Options ──
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+    <div className="modal-overlay" onMouseDown={onClose}>
+      <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
         <h2>Login</h2>
 
         <button
@@ -393,8 +395,8 @@ export function PasswordDecryptModal({
   };
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+    <div className="modal-overlay" onMouseDown={onClose}>
+      <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
         <h2>Enter Password</h2>
         <p style={{ color: "var(--text-muted)", fontSize: 13, marginBottom: 16 }}>
           Your login link was verified. Enter your password to decrypt your private key.

@@ -17,6 +17,7 @@ use tracing_subscriber::EnvFilter;
 use nostr_sdk::ToBech32;
 use nostrbox_contextvm::{EmailConfig, OperationRequest, OperationResponse};
 use nostrbox_contextvm::OperationHandler;
+use nostrbox_relay::config::RelayAccessConfig;
 use nostrbox_relay::setup::{RelayConfig, start_relay};
 use nostrbox_store::StorePool;
 
@@ -36,6 +37,9 @@ pub struct Config {
     /// Email login configuration.
     #[serde(default)]
     pub email: EmailConfig,
+    /// Relay access control configuration.
+    #[serde(default)]
+    pub relay: RelayAccessConfig,
 }
 
 impl Default for Config {
@@ -49,6 +53,7 @@ impl Default for Config {
             relay_urls: vec![],
             public_url: None,
             email: EmailConfig::default(),
+            relay: RelayAccessConfig::default(),
         }
     }
 }
@@ -136,7 +141,7 @@ async fn main() {
     let relay_config = RelayConfig {
         port: config.relay_port,
     };
-    let relay = start_relay(relay_config, pool.clone())
+    let relay = start_relay(relay_config, pool.clone(), config.relay.clone())
         .await
         .expect("failed to start relay");
     let local_relay_url = relay.url().await.to_string();
@@ -202,8 +207,9 @@ async fn main() {
                     let store = pool.get()?;
                     let tokens = store.cleanup_login_tokens().unwrap_or(0);
                     let emails = store.cleanup_abandoned_email_identities(ttl).unwrap_or(0);
-                    if tokens > 0 || emails > 0 {
-                        info!(tokens, emails, "email cleanup completed");
+                    let audit = store.cleanup_relay_audit_log(86400 * 30).unwrap_or(0); // 30 days
+                    if tokens > 0 || emails > 0 || audit > 0 {
+                        info!(tokens, emails, audit, "cleanup completed");
                     }
                     Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
                 })

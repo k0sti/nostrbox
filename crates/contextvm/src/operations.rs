@@ -101,6 +101,8 @@ impl<'a> OperationHandler<'a> {
             "email.redeem" => self.email_redeem(req),
             "email.clear" => self.email_clear(req),
             "email.change_password" => self.email_change_password(req),
+            "email.list" => self.email_list(req),
+            "email.delete" => self.email_delete(req),
             _ => OperationResponse::error_with_code(
                 ErrorCode::UnknownOperation,
                 format!("unknown operation: {}", req.op),
@@ -662,6 +664,39 @@ impl<'a> OperationHandler<'a> {
 
         match self.store.update_email_ncryptsec(&email_addr, caller, ncryptsec) {
             Ok(true) => OperationResponse::success(serde_json::json!({"status": "updated"})),
+            Ok(false) => OperationResponse::error_with_code(
+                ErrorCode::NotFound,
+                "email identity not found",
+            ),
+            Err(e) => OperationResponse::error(e.to_string()),
+        }
+    }
+
+    /// List all email identities (admin only).
+    fn email_list(&self, req: &OperationRequest) -> OperationResponse {
+        if let Some(err) = self.require_admin(req) {
+            return err;
+        }
+        match self.store.list_email_identities() {
+            Ok(identities) => OperationResponse::success(serde_json::Value::Array(identities)),
+            Err(e) => OperationResponse::error(e.to_string()),
+        }
+    }
+
+    /// Delete an email identity by ID (admin only).
+    /// Params: { id }
+    fn email_delete(&self, req: &OperationRequest) -> OperationResponse {
+        if let Some(err) = self.require_admin(req) {
+            return err;
+        }
+        let Some(id) = req.params.get("id").and_then(|v| v.as_i64()) else {
+            return OperationResponse::error_with_code(
+                ErrorCode::ValidationError,
+                "missing param: id",
+            );
+        };
+        match self.store.delete_email_identity(id) {
+            Ok(true) => OperationResponse::success(serde_json::json!({"deleted": true})),
             Ok(false) => OperationResponse::error_with_code(
                 ErrorCode::NotFound,
                 "email identity not found",

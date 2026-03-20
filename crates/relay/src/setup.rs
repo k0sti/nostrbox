@@ -1,8 +1,11 @@
+use std::sync::Arc;
+
 use nostr_relay_builder::prelude::*;
 use tracing::info;
 
 use nostrbox_store::StorePool;
 
+use crate::config::RelayAccessConfig;
 use crate::policy::{NostrboxWritePolicy, NostrboxQueryPolicy};
 
 /// Configuration for the Nostrbox relay.
@@ -22,9 +25,11 @@ impl Default for RelayConfig {
 pub async fn start_relay(
     config: RelayConfig,
     pool: StorePool,
+    access_config: RelayAccessConfig,
 ) -> Result<LocalRelay, nostr_relay_builder::Error> {
-    let write_policy = NostrboxWritePolicy::new(pool.clone());
-    let query_policy = NostrboxQueryPolicy::new(pool);
+    let access_config = Arc::new(access_config);
+    let write_policy = NostrboxWritePolicy::new(pool.clone(), access_config.clone());
+    let query_policy = NostrboxQueryPolicy::new(pool, access_config);
 
     let relay = LocalRelay::builder()
         .port(config.port)

@@ -106,8 +106,28 @@ impl Store {
 
             CREATE INDEX IF NOT EXISTS idx_login_tokens_email ON login_tokens(email);
             CREATE INDEX IF NOT EXISTS idx_login_tokens_expires_at ON login_tokens(expires_at);
+
+            CREATE TABLE IF NOT EXISTS relay_audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp INTEGER NOT NULL,
+                pubkey TEXT,
+                kind INTEGER,
+                action TEXT NOT NULL,
+                role TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                ip_addr TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_relay_audit_log_timestamp ON relay_audit_log(timestamp);
+            CREATE INDEX IF NOT EXISTS idx_relay_audit_log_pubkey ON relay_audit_log(pubkey);
             ",
         )?;
+
+        // Safe migration: add last_login_at if missing
+        let _ = self.conn.execute_batch(
+            "ALTER TABLE email_identities ADD COLUMN last_login_at INTEGER;"
+        );
+
         Ok(())
     }
 

@@ -1,6 +1,8 @@
 use nostrbox_core::{GlobalRole, Pubkey, Visibility};
 use nostrbox_store::Store;
 
+use crate::config::RelayAccessConfig;
+
 /// Result of an admission check.
 #[derive(Debug)]
 pub enum AdmissionResult {
@@ -8,14 +10,23 @@ pub enum AdmissionResult {
     Deny(String),
 }
 
-/// Check if a pubkey is allowed to write events.
-pub fn check_write_admission(store: &Store, pubkey: &Pubkey) -> AdmissionResult {
+/// Check if a pubkey is allowed to write an event of the given kind.
+pub fn check_write_admission(
+    store: &Store,
+    pubkey: &Pubkey,
+    kind: u16,
+    access_config: &RelayAccessConfig,
+) -> AdmissionResult {
     match store.get_actor(pubkey) {
         Ok(Some(actor)) => {
-            if actor.global_role == GlobalRole::Guest {
-                AdmissionResult::Deny("guests cannot write".into())
-            } else {
+            let role_access = access_config.role_access(actor.global_role);
+            if role_access.can_write(kind) {
                 AdmissionResult::Allow
+            } else {
+                AdmissionResult::Deny(format!(
+                    "{:?} cannot write kind {}",
+                    actor.global_role, kind
+                ))
             }
         }
         Ok(None) => AdmissionResult::Deny("unknown actor".into()),
@@ -33,7 +44,6 @@ pub fn check_read_admission(
     match visibility {
         Visibility::Public => AdmissionResult::Allow,
         Visibility::Internal => {
-            // Only owner/system can read internal content
             match store.get_actor(pubkey) {
                 Ok(Some(actor)) if actor.global_role == GlobalRole::Owner => {
                     AdmissionResult::Allow
@@ -57,7 +67,6 @@ pub fn check_read_admission(
                 Err(e) => AdmissionResult::Deny(format!("store error: {e}")),
             }
         }
-        // Reserved variants — deny for now
         Visibility::Circle | Visibility::Personal => {
             AdmissionResult::Deny("visibility type not yet supported".into())
         }

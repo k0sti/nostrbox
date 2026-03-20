@@ -1,9 +1,11 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { NostrIdentity } from "../lib/nostr";
 import { compressNpub } from "../lib/nostr";
-import { ops, type Actor } from "../lib/api";
+import { ops } from "../lib/api";
 import { isEmailLogin, getLoginMethod } from "../lib/signer";
 import { getStoredNsec, encryptNsec } from "../lib/nip49";
+import { nsecEncode } from "nostr-tools/nip19";
+import { hexToBytes } from "nostr-tools/utils";
 
 interface ProfilePanelProps {
   identity: NostrIdentity;
@@ -14,7 +16,6 @@ interface ProfilePanelProps {
 type SubPanel = null | "sovereign" | "change-password";
 
 export function ProfilePanel({ identity, onClose, onLogout }: ProfilePanelProps) {
-  const [agentActors, setAgentActors] = useState<Actor[]>([]);
   const [subPanel, setSubPanel] = useState<SubPanel>(null);
   const [showNsec, setShowNsec] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
@@ -23,19 +24,12 @@ export function ProfilePanel({ identity, onClose, onLogout }: ProfilePanelProps)
   const [submitting, setSubmitting] = useState(false);
 
   // Password change
+  const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [newPasswordConfirm, setNewPasswordConfirm] = useState("");
 
   const emailLogin = isEmailLogin();
   const loginMethod = getLoginMethod();
-
-  useEffect(() => {
-    ops.actorList().then((res) => {
-      if (res.ok && res.data) {
-        setAgentActors(res.data.filter((a) => a.kind === "agent"));
-      }
-    });
-  }, []);
 
   const handleCopy = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
@@ -64,6 +58,10 @@ export function ProfilePanel({ identity, onClose, onLogout }: ProfilePanelProps)
     setError(null);
     setSuccess(null);
 
+    if (currentPassword.length < 8) {
+      setError("Current password must be at least 8 characters");
+      return;
+    }
     if (newPassword.length < 8) {
       setError("New password must be at least 8 characters");
       return;
@@ -85,6 +83,7 @@ export function ProfilePanel({ identity, onClose, onLogout }: ProfilePanelProps)
       const res = await ops.emailChangePassword(newNcryptsec);
       if (res.ok) {
         setSuccess("Password changed successfully");
+        setCurrentPassword("");
         setNewPassword("");
         setNewPasswordConfirm("");
       } else {
@@ -97,25 +96,26 @@ export function ProfilePanel({ identity, onClose, onLogout }: ProfilePanelProps)
   };
 
   const nsec = emailLogin ? getStoredNsec() : null;
+  const nsecBech32 = nsec ? nsecEncode(hexToBytes(nsec)) : null;
 
   // ── Go Sovereign Sub-panel ──
   if (subPanel === "sovereign") {
     return (
-      <div className="modal-overlay" onClick={onClose}>
-        <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 440 }}>
+      <div className="modal-overlay" onMouseDown={onClose}>
+        <div className="modal" onMouseDown={(e) => e.stopPropagation()} style={{ maxWidth: 440 }}>
           <h2>Go Sovereign</h2>
           <p style={{ color: "var(--text-muted)", fontSize: 13, marginBottom: 16 }}>
             Take full control of your keys. After clearing server-side storage, you'll need a NIP-07 extension or Amber to log in.
           </p>
 
-          {nsec && (
+          {nsecBech32 && (
             <div className="card" style={{ marginBottom: 12 }}>
               <div style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600, marginBottom: 4 }}>
                 Your Private Key (nsec)
               </div>
               {showNsec ? (
                 <div style={{ fontFamily: "monospace", fontSize: 12, color: "var(--danger)", wordBreak: "break-all", marginBottom: 8 }}>
-                  {nsec}
+                  {nsecBech32}
                 </div>
               ) : (
                 <button
@@ -128,7 +128,7 @@ export function ProfilePanel({ identity, onClose, onLogout }: ProfilePanelProps)
               )}
               <button
                 className="copy-btn"
-                onClick={() => handleCopy(nsec, "nsec")}
+                onClick={() => handleCopy(nsecBech32, "nsec")}
                 style={{ fontSize: 12 }}
               >
                 {copied === "nsec" ? "Copied!" : "Copy nsec"}
@@ -165,14 +165,25 @@ export function ProfilePanel({ identity, onClose, onLogout }: ProfilePanelProps)
   // ── Change Password Sub-panel ──
   if (subPanel === "change-password") {
     return (
-      <div className="modal-overlay" onClick={onClose}>
-        <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-overlay" onMouseDown={onClose}>
+        <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
           <h2>Change Password</h2>
           <p style={{ color: "var(--text-muted)", fontSize: 13, marginBottom: 16 }}>
             Re-encrypt your private key with a new password.
           </p>
 
           <form onSubmit={handleChangePassword}>
+            <div className="form-field" style={{ marginBottom: 12 }}>
+              <label>Current Password</label>
+              <input
+                type="password"
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                placeholder="Enter current password"
+                required
+                minLength={8}
+              />
+            </div>
             <div className="form-field" style={{ marginBottom: 12 }}>
               <label>New Password</label>
               <input
@@ -203,7 +214,7 @@ export function ProfilePanel({ identity, onClose, onLogout }: ProfilePanelProps)
             </button>
           </form>
 
-          <button className="modal-close" onClick={() => { setSubPanel(null); setError(null); setSuccess(null); }}>
+          <button className="modal-close" onClick={() => { setSubPanel(null); setError(null); setSuccess(null); setCurrentPassword(""); setNewPassword(""); setNewPasswordConfirm(""); }}>
             Back
           </button>
         </div>
@@ -213,8 +224,8 @@ export function ProfilePanel({ identity, onClose, onLogout }: ProfilePanelProps)
 
   // ── Main Profile Panel ──
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+    <div className="modal-overlay" onMouseDown={onClose}>
+      <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
         <div className="profile-panel">
           <div className="profile-avatar-large">
             {identity.picture ? (
@@ -238,37 +249,6 @@ export function ProfilePanel({ identity, onClose, onLogout }: ProfilePanelProps)
               Signed in via {loginMethod === "email" ? "email" : loginMethod === "extension" ? "extension" : loginMethod === "amber" ? "Amber" : "Nostr Connect"}
             </div>
           )}
-
-          <div className="card" style={{ textAlign: "left", marginTop: 16 }}>
-            <div style={{ fontSize: 13, color: "var(--text-muted)", marginBottom: 8 }}>
-              Agent Keys
-            </div>
-            {agentActors.length === 0 ? (
-              <div style={{ fontSize: 13, color: "var(--text-muted)", fontStyle: "italic" }}>
-                No agent keys configured yet.
-              </div>
-            ) : (
-              <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-                {agentActors.map((a) => (
-                  <li
-                    key={a.pubkey}
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      padding: "4px 0",
-                      fontSize: 13,
-                    }}
-                  >
-                    <span style={{ wordBreak: "break-all" }}>
-                      {a.npub ? compressNpub(a.npub) : `${a.pubkey.slice(0, 8)}...`}
-                    </span>
-                    <span className={`badge badge-${a.status}`}>{a.status}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
 
           {emailLogin && (
             <div style={{ display: "flex", gap: 8, marginTop: 12 }}>

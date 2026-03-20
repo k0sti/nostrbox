@@ -12,6 +12,8 @@ import { ActorsView } from "./views/ActorsView";
 import { GroupsView } from "./views/GroupsView";
 import { RelaysView } from "./views/RelaysView";
 import { EventsView } from "./views/EventsView";
+import { AgentsView } from "./views/AgentsView";
+import { EmailAccountsView } from "./views/EmailAccountsView";
 import { loginWithExtension, loginWithAmber, loginWithNostrConnect, disconnectNostrConnect, fetchProfile, type NostrIdentity } from "./lib/nostr";
 import { connectTransport, disconnectTransport } from "./lib/contextvm";
 import { ops, setCurrentCaller } from "./lib/api";
@@ -58,6 +60,7 @@ function App() {
 
   // Magic link redemption data (token redeemed, waiting for password)
   const [redeemData, setRedeemData] = useState<{ npub: string; ncryptsec: string } | null>(null);
+  const [tokenError, setTokenError] = useState<string | null>(null);
 
   const role = identity?.role;
   const isAdmin = !!role && ADMIN_ROLES.includes(role);
@@ -77,6 +80,7 @@ function App() {
           setModal("password-decrypt");
         } else {
           console.error("Token redemption failed:", res.error);
+          setTokenError("Login link expired or invalid. Please request a new one.");
         }
       });
     }
@@ -100,8 +104,8 @@ function App() {
 
   // Redirect away from views the user can't access
   useEffect(() => {
-    const adminViews: View[] = ["registrations", "actors"];
-    const memberViews: View[] = ["groups", "relays"];
+    const adminViews: View[] = ["registrations", "actors", "email-accounts"];
+    const memberViews: View[] = ["groups", "agents", "relays"];
     const publicOnlyViews: View[] = ["register"];
 
     if (adminViews.includes(view) && !isAdmin) setView("dashboard");
@@ -192,8 +196,12 @@ function App() {
         return <RegistrationsView />;
       case "actors":
         return <ActorsView />;
+      case "email-accounts":
+        return <EmailAccountsView />;
       case "groups":
         return <GroupsView />;
+      case "agents":
+        return <AgentsView />;
       case "relays":
         return <RelaysView />;
       case "events":
@@ -211,6 +219,12 @@ function App() {
         onSettingsClick={() => setModal("relay")}
         onMenuClick={() => setNavOpen(!navOpen)}
       />
+      {tokenError && (
+        <div style={{ background: "var(--danger)", color: "#fff", padding: "10px 16px", fontSize: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span>{tokenError}</span>
+          <button onClick={() => setTokenError(null)} style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: 18, lineHeight: 1, padding: "0 4px" }} aria-label="Dismiss">&times;</button>
+        </div>
+      )}
       <div className="app-body">
         {navOpen && (
           <div className="nav-overlay open" onClick={() => setNavOpen(false)} />

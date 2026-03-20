@@ -6,5 +6,6 @@
 //! - Relay setup and lifecycle (setup.rs)
 
 pub mod admission;
+pub mod config;
 pub mod policy;
 pub mod setup;

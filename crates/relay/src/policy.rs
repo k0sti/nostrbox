@@ -1,15 +1,18 @@
 use std::fmt;
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use nostr_relay_builder::prelude::*;
 use nostrbox_core::GlobalRole;
 use nostrbox_store::StorePool;
 
 use crate::admission::{check_write_admission, AdmissionResult};
+use crate::config::RelayAccessConfig;
 
-/// Write policy that checks actor permissions via the store.
+/// Write policy that checks actor permissions via the store and access config.
 pub struct NostrboxWritePolicy {
     pool: StorePool,
+    access_config: Arc<RelayAccessConfig>,
 }
 
 impl fmt::Debug for NostrboxWritePolicy {
@@ -19,8 +22,8 @@ impl fmt::Debug for NostrboxWritePolicy {
 }
 
 impl NostrboxWritePolicy {
-    pub fn new(pool: StorePool) -> Self {
-        Self { pool }
+    pub fn new(pool: StorePool, access_config: Arc<RelayAccessConfig>) -> Self {
+        Self { pool, access_config }
     }
 }
 
@@ -28,23 +31,40 @@ impl WritePolicy for NostrboxWritePolicy {
     fn admit_event<'a>(
         &'a self,
         event: &'a Event,
-        _addr: &'a SocketAddr,
+        addr: &'a SocketAddr,
     ) -> BoxedFuture<'a, WritePolicyResult> {
         Box::pin(async move {
-            // Always allow NIP-59 gift wraps (kind 1059/1060) — needed for
-            // encrypted ContextVM transport. These use ephemeral sender keys
-            // that won't match any registered actor.
             let kind = event.kind.as_u16();
-            if kind == 1059 || kind == 1060 {
+
+            // Check bypass kinds (e.g., NIP-59 gift wraps for ContextVM transport).
+            if self.access_config.write_bypass_kinds.contains(&kind) {
                 return WritePolicyResult::Accept;
             }
 
             let pubkey = event.pubkey.to_hex();
             match self.pool.get() {
-                Ok(store) => match check_write_admission(&store, &pubkey) {
-                    AdmissionResult::Allow => WritePolicyResult::Accept,
-                    AdmissionResult::Deny(msg) => WritePolicyResult::reject(MachineReadablePrefix::Blocked, msg),
-                },
+                Ok(store) => {
+                    match check_write_admission(&store, &pubkey, kind, &self.access_config) {
+                        AdmissionResult::Allow => WritePolicyResult::Accept,
+                        AdmissionResult::Deny(reason) => {
+                            let role = match store.get_actor(&pubkey) {
+                                Ok(Some(actor)) => format!("{:?}", actor.global_role).to_lowercase(),
+                                Ok(None) => "unknown".to_string(),
+                                Err(_) => "unknown".to_string(),
+                            };
+                            tracing::debug!(pubkey = %pubkey, kind, %reason, "write denied");
+                            let _ = store.log_relay_denial(
+                                Some(&pubkey),
+                                Some(kind),
+                                "write",
+                                &role,
+                                &reason,
+                                Some(&addr.to_string()),
+                            );
+                            WritePolicyResult::reject(MachineReadablePrefix::Blocked, reason)
+                        }
+                    }
+                }
                 Err(e) => WritePolicyResult::reject(MachineReadablePrefix::Error, format!("store error: {e}")),
             }
         })
@@ -52,12 +72,9 @@ impl WritePolicy for NostrboxWritePolicy {
 }
 
 /// Query/read policy that checks actor role before allowing REQ.
-///
-/// - Unauthenticated: denied (NIP-42 should block this, but defense in depth)
-/// - Guest: can only query kind 9021 (join requests) and kind 0 (metadata)
-/// - Member+: can query all kinds
 pub struct NostrboxQueryPolicy {
     pool: StorePool,
+    access_config: Arc<RelayAccessConfig>,
 }
 
 impl fmt::Debug for NostrboxQueryPolicy {
@@ -67,8 +84,8 @@ impl fmt::Debug for NostrboxQueryPolicy {
 }
 
 impl NostrboxQueryPolicy {
-    pub fn new(pool: StorePool) -> Self {
-        Self { pool }
+    pub fn new(pool: StorePool, access_config: Arc<RelayAccessConfig>) -> Self {
+        Self { pool, access_config }
     }
 
     fn get_role(&self, pubkey: &str) -> GlobalRole {
@@ -82,22 +99,26 @@ impl NostrboxQueryPolicy {
     }
 }
 
-/// Kinds that guests are allowed to query.
-const GUEST_READ_KINDS: &[u16] = &[
-    0,     // Metadata (needed for profile display)
-    9021,  // Join request (so they can check their own request status)
-];
-
 impl QueryPolicy for NostrboxQueryPolicy {
     fn admit_query<'a>(
         &'a self,
         query: &'a Filter,
-        _addr: &'a SocketAddr,
+        addr: &'a SocketAddr,
         authed_pubkey: Option<&'a PublicKey>,
     ) -> BoxedFuture<'a, QueryPolicyResult> {
         Box::pin(async move {
             let Some(pubkey) = authed_pubkey else {
                 tracing::debug!("query rejected: no authed pubkey");
+                if let Ok(store) = self.pool.get() {
+                    let _ = store.log_relay_denial(
+                        None,
+                        None,
+                        "read",
+                        "unauthenticated",
+                        "authentication required",
+                        Some(&addr.to_string()),
+                    );
+                }
                 return QueryPolicyResult::reject(
                     MachineReadablePrefix::AuthRequired,
                     "authentication required",
@@ -106,25 +127,38 @@ impl QueryPolicy for NostrboxQueryPolicy {
 
             let hex = pubkey.to_hex();
             let role = self.get_role(&hex);
+            let role_access = self.access_config.role_access(role);
             tracing::debug!(pubkey = %hex, role = ?role, "query policy check");
 
-            // Members, admins, owners can read everything
-            if role != GlobalRole::Guest {
+            // If role has read_all, allow everything
+            if role_access.read_all {
                 return QueryPolicyResult::Accept;
             }
 
-            // Guests: check if querying only allowed kinds
+            // Check if querying only allowed kinds
             if let Some(ref kinds) = query.kinds {
-                let all_allowed = kinds.iter().all(|k| GUEST_READ_KINDS.contains(&k.as_u16()));
+                let all_allowed = kinds.iter().all(|k| role_access.can_read(k.as_u16()));
                 if all_allowed {
                     return QueryPolicyResult::Accept;
                 }
             }
 
-            // Guest with no kind filter or disallowed kinds → deny
+            // Deny: no kind filter or disallowed kinds
+            let reason = format!("{:?}s have limited read access", role);
+            tracing::debug!(pubkey = %hex, role = ?role, %reason, "query denied");
+            if let Ok(store) = self.pool.get() {
+                let _ = store.log_relay_denial(
+                    Some(&hex),
+                    None,
+                    "read",
+                    &format!("{:?}", role).to_lowercase(),
+                    &reason,
+                    Some(&addr.to_string()),
+                );
+            }
             QueryPolicyResult::reject(
                 MachineReadablePrefix::Restricted,
-                "guests have limited read access",
+                reason,
             )
         })
     }
