@@ -5,4 +5,4 @@ pub mod types;
 
 pub use email::EmailConfig;
 pub use operations::OperationHandler;
-pub use types::{ErrorCode, OperationRequest, OperationResponse};
+pub use types::{AuthSource, ErrorCode, OperationRequest, OperationResponse};

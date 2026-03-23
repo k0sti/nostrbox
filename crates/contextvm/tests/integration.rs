@@ -43,6 +43,7 @@ fn req(op: &str, params: serde_json::Value, caller: Option<&str>) -> OperationRe
         op: op.into(),
         params,
         caller: caller.map(String::from),
+        auth_source: nostrbox_contextvm::AuthSource::LocalBypass,
     }
 }
 
@@ -51,8 +52,9 @@ fn req(op: &str, params: serde_json::Value, caller: Option<&str>) -> OperationRe
 #[test]
 fn registration_list_empty() {
     let store = make_store();
+    let admin = make_admin(&store);
     let handler = OperationHandler::new(&store);
-    let resp = handler.handle(&req("registration.list", json!({}), None));
+    let resp = handler.handle(&req("registration.list", json!({}), Some(&admin)));
     assert!(resp.ok);
     let data = resp.data.unwrap();
     let list = data.as_array().unwrap();
@@ -62,10 +64,11 @@ fn registration_list_empty() {
 #[test]
 fn registration_list_with_data() {
     let store = make_store();
+    let admin = make_admin(&store);
     make_registration(&store, "user1");
     make_registration(&store, "user2");
     let handler = OperationHandler::new(&store);
-    let resp = handler.handle(&req("registration.list", json!({}), None));
+    let resp = handler.handle(&req("registration.list", json!({}), Some(&admin)));
     assert!(resp.ok);
     let list = resp.data.unwrap();
     assert_eq!(list.as_array().unwrap().len(), 2);
@@ -114,8 +117,8 @@ fn registration_approve_success() {
     let data = resp.data.unwrap();
     assert_eq!(data["status"], "approved");
 
-    // Approving should also create an actor
-    let actor_resp = handler.handle(&req("actor.get", json!({"pubkey": "new_user"}), None));
+    // Approving should also create an actor (self-access by new_user)
+    let actor_resp = handler.handle(&req("actor.get", json!({"pubkey": "new_user"}), Some("new_user")));
     assert!(actor_resp.ok);
     let actor_data = actor_resp.data.unwrap();
     assert_eq!(actor_data["pubkey"], "new_user");
@@ -192,20 +195,20 @@ fn actor_list_and_get() {
     let admin_pk = make_admin(&store);
     let handler = OperationHandler::new(&store);
 
-    // List should contain our admin
-    let resp = handler.handle(&req("actor.list", json!({}), None));
+    // List requires admin
+    let resp = handler.handle(&req("actor.list", json!({}), Some(&admin_pk)));
     assert!(resp.ok);
     let list = resp.data.unwrap();
     assert_eq!(list.as_array().unwrap().len(), 1);
 
-    // Get should find the admin
-    let resp = handler.handle(&req("actor.get", json!({"pubkey": admin_pk}), None));
+    // Get own record (self-access)
+    let resp = handler.handle(&req("actor.get", json!({"pubkey": &admin_pk}), Some(&admin_pk)));
     assert!(resp.ok);
     let data = resp.data.unwrap();
     assert_eq!(data["global_role"], "admin");
 
-    // Get a nonexistent actor
-    let resp = handler.handle(&req("actor.get", json!({"pubkey": "ghost"}), None));
+    // Get a nonexistent actor (admin can try, gets not_found)
+    let resp = handler.handle(&req("actor.get", json!({"pubkey": "ghost"}), Some(&admin_pk)));
     assert!(!resp.ok);
     assert_eq!(resp.error_code.as_deref(), Some("not_found"));
 }
@@ -246,11 +249,11 @@ fn actor_detail_with_groups_and_registration() {
         Some(&admin),
     ));
 
-    // Now get actor detail
+    // Now get actor detail (admin access)
     let resp = handler.handle(&req(
         "actor.detail",
         json!({"pubkey": "detail_user"}),
-        None,
+        Some(&admin),
     ));
     assert!(resp.ok, "expected ok, got: {:?}", resp.error);
     let data = resp.data.unwrap();
@@ -347,8 +350,8 @@ fn group_add_and_remove_member() {
     ));
     assert!(resp.ok, "add_member failed: {:?}", resp.error);
 
-    // Verify the member is in the group
-    let resp = handler.handle(&req("group.get", json!({"group_id": "grp1"}), None));
+    // Verify the member is in the group (admin access, group is non-public)
+    let resp = handler.handle(&req("group.get", json!({"group_id": "grp1"}), Some(&admin)));
     assert!(resp.ok);
     let data = resp.data.unwrap();
     let members = data["members"].as_array().unwrap();
@@ -364,7 +367,7 @@ fn group_add_and_remove_member() {
     assert!(resp.ok, "remove_member failed: {:?}", resp.error);
 
     // Verify member is gone
-    let resp = handler.handle(&req("group.get", json!({"group_id": "grp1"}), None));
+    let resp = handler.handle(&req("group.get", json!({"group_id": "grp1"}), Some(&admin)));
     let data = resp.data.unwrap();
     let members = data["members"].as_array().unwrap();
     assert!(members.is_empty());
@@ -375,7 +378,7 @@ fn group_add_and_remove_member() {
 #[test]
 fn dashboard_get_actors_by_role() {
     let store = make_store();
-    make_admin(&store);
+    let admin = make_admin(&store);
 
     // Add a regular member
     let member = Actor {
@@ -392,7 +395,7 @@ fn dashboard_get_actors_by_role() {
     store.upsert_actor(&member).unwrap();
 
     let handler = OperationHandler::new(&store);
-    let resp = handler.handle(&req("dashboard.get", json!({}), None));
+    let resp = handler.handle(&req("dashboard.get", json!({}), Some(&admin)));
     assert!(resp.ok, "dashboard.get failed: {:?}", resp.error);
     let data = resp.data.unwrap();
     // Should contain actors_by_role with at least admin and member counts

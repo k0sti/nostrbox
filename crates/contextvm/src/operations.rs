@@ -1,11 +1,26 @@
 use nostr_sdk::{PublicKey, ToBech32};
-use nostrbox_core::{ActorStatus, GlobalRole, Group, GroupMember, GroupRole, RegistrationStatus};
+use nostrbox_core::{ActorStatus, GlobalRole, Group, GroupMember, GroupRole, RegistrationStatus, Visibility};
 use nostrbox_store::Store;
 use tracing::info;
 
 use crate::email::{self, EmailConfig};
 use crate::events;
 use crate::types::{ErrorCode, OperationRequest, OperationResponse};
+
+/// Resolved caller role for operation access control.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CallerRole {
+    Owner,
+    Admin,
+    Member,
+    Anonymous,
+}
+
+impl CallerRole {
+    fn is_admin(&self) -> bool {
+        matches!(self, CallerRole::Owner | CallerRole::Admin)
+    }
+}
 
 /// Compute bech32 npub from hex pubkey, returning empty string on failure.
 fn compute_npub(hex_pubkey: &str) -> String {
@@ -80,25 +95,25 @@ impl<'a> OperationHandler<'a> {
 
     /// Dispatch an operation request to the appropriate handler.
     pub fn handle(&self, req: &OperationRequest) -> OperationResponse {
-        info!(op = %req.op, "handling operation");
+        info!(op = %req.op, auth = ?req.auth_source, "handling operation");
         match req.op.as_str() {
             "registration.submit" => self.registration_submit(req),
-            "registration.list" => self.registration_list(),
+            "registration.list" => self.registration_list(req),
             "registration.get" => self.registration_get(req),
             "registration.approve" => self.registration_approve(req),
             "registration.deny" => self.registration_deny(req),
             "registration.delete" => self.registration_delete(req),
-            "actor.list" => self.actor_list(),
+            "actor.list" => self.actor_list(req),
             "actor.get" => self.actor_get(req),
             "actor.delete" => self.actor_delete(req),
             "actor.detail" => self.actor_detail(req),
-            "group.list" => self.group_list(),
+            "group.list" => self.group_list(req),
             "group.get" => self.group_get(req),
             "group.put" => self.group_put(req),
             "group.add_member" => self.group_add_member(req),
             "group.delete" => self.group_delete(req),
             "group.remove_member" => self.group_remove_member(req),
-            "dashboard.get" => self.dashboard_get(),
+            "dashboard.get" => self.dashboard_get(req),
             "email.register" => self.email_register(req),
             "email.login" => self.email_login(req),
             "email.redeem" => self.email_redeem(req),
@@ -126,6 +141,57 @@ impl<'a> OperationHandler<'a> {
             Ok(Some(_)) => Some(OperationResponse::error_with_code(
                 ErrorCode::Forbidden,
                 "admin or owner role required",
+            )),
+            Ok(None) => Some(OperationResponse::error_with_code(
+                ErrorCode::Forbidden,
+                "caller not found",
+            )),
+            Err(e) => Some(OperationResponse::error(e.to_string())),
+        }
+    }
+
+    /// Require an authenticated caller. Returns the caller pubkey or an error.
+    fn require_authenticated(&self, req: &OperationRequest) -> Result<String, OperationResponse> {
+        req.caller.clone().ok_or_else(|| {
+            OperationResponse::error_with_code(ErrorCode::Unauthorized, "authentication required")
+        })
+    }
+
+    /// Resolve the caller's effective role from the actor store.
+    fn resolve_caller_role(&self, req: &OperationRequest) -> CallerRole {
+        let Some(caller) = &req.caller else {
+            return CallerRole::Anonymous;
+        };
+        match self.store.get_actor(caller) {
+            Ok(Some(actor)) => match actor.global_role {
+                GlobalRole::Owner => CallerRole::Owner,
+                GlobalRole::Admin => CallerRole::Admin,
+                GlobalRole::Member | GlobalRole::Guest => CallerRole::Member,
+            },
+            _ => CallerRole::Anonymous,
+        }
+    }
+
+    /// Check that the caller is either the target pubkey (self-access) or an admin.
+    fn require_self_or_admin(
+        &self,
+        req: &OperationRequest,
+        target_pubkey: &str,
+    ) -> Option<OperationResponse> {
+        let Some(caller) = &req.caller else {
+            return Some(OperationResponse::error_with_code(
+                ErrorCode::Unauthorized,
+                "authentication required",
+            ));
+        };
+        if caller == target_pubkey {
+            return None; // self-access
+        }
+        match self.store.get_actor(caller) {
+            Ok(Some(actor)) if actor.global_role.can_manage() => None,
+            Ok(Some(_)) => Some(OperationResponse::error_with_code(
+                ErrorCode::Forbidden,
+                "can only access own record, or admin role required",
             )),
             Ok(None) => Some(OperationResponse::error_with_code(
                 ErrorCode::Forbidden,
@@ -169,7 +235,10 @@ impl<'a> OperationHandler<'a> {
         }
     }
 
-    fn registration_list(&self) -> OperationResponse {
+    fn registration_list(&self, req: &OperationRequest) -> OperationResponse {
+        if let Some(err) = self.require_admin(req) {
+            return err;
+        }
         match self.store.list_registrations() {
             Ok(regs) => OperationResponse::success(serde_json::to_value(regs).unwrap()),
             Err(e) => OperationResponse::error(e.to_string()),
@@ -289,7 +358,10 @@ impl<'a> OperationHandler<'a> {
 
     // ── Actor operations ───────────────────────────────────────────
 
-    fn actor_list(&self) -> OperationResponse {
+    fn actor_list(&self, req: &OperationRequest) -> OperationResponse {
+        if let Some(err) = self.require_admin(req) {
+            return err;
+        }
         match self.store.list_actors() {
             Ok(actors) => OperationResponse::success(serde_json::to_value(actors).unwrap()),
             Err(e) => OperationResponse::error(e.to_string()),
@@ -303,6 +375,9 @@ impl<'a> OperationHandler<'a> {
                 "missing param: pubkey",
             );
         };
+        if let Some(err) = self.require_self_or_admin(req, pubkey) {
+            return err;
+        }
         match self.store.get_actor(pubkey) {
             Ok(Some(actor)) => OperationResponse::success(serde_json::to_value(actor).unwrap()),
             Ok(None) => {
@@ -319,6 +394,9 @@ impl<'a> OperationHandler<'a> {
                 "missing param: pubkey",
             );
         };
+        if let Some(err) = self.require_self_or_admin(req, pubkey) {
+            return err;
+        }
         match self.store.get_actor_detail(pubkey) {
             Ok(Some(detail)) => {
                 OperationResponse::success(serde_json::to_value(detail).unwrap())
@@ -352,9 +430,24 @@ impl<'a> OperationHandler<'a> {
 
     // ── Group operations ───────────────────────────────────────────
 
-    fn group_list(&self) -> OperationResponse {
+    fn group_list(&self, req: &OperationRequest) -> OperationResponse {
         match self.store.list_groups() {
-            Ok(groups) => OperationResponse::success(serde_json::to_value(groups).unwrap()),
+            Ok(groups) => {
+                let role = self.resolve_caller_role(req);
+                let filtered: Vec<Group> = if role.is_admin() {
+                    groups
+                } else {
+                    let caller = req.caller.as_deref().unwrap_or_default();
+                    groups
+                        .into_iter()
+                        .filter(|g| {
+                            g.visibility == Visibility::Public
+                                || g.members.iter().any(|m| m.pubkey == caller)
+                        })
+                        .collect()
+                };
+                OperationResponse::success(serde_json::to_value(filtered).unwrap())
+            }
             Err(e) => OperationResponse::error(e.to_string()),
         }
     }
@@ -367,7 +460,30 @@ impl<'a> OperationHandler<'a> {
             );
         };
         match self.store.get_group(group_id) {
-            Ok(Some(group)) => OperationResponse::success(serde_json::to_value(group).unwrap()),
+            Ok(Some(group)) => {
+                // Public groups: anyone can view
+                if group.visibility == Visibility::Public {
+                    return OperationResponse::success(
+                        serde_json::to_value(&group).unwrap(),
+                    );
+                }
+                // Non-public: must be group member or admin
+                let role = self.resolve_caller_role(req);
+                if role.is_admin() {
+                    return OperationResponse::success(
+                        serde_json::to_value(&group).unwrap(),
+                    );
+                }
+                let caller = req.caller.as_deref().unwrap_or_default();
+                if group.members.iter().any(|m| m.pubkey == caller) {
+                    OperationResponse::success(serde_json::to_value(&group).unwrap())
+                } else {
+                    OperationResponse::error_with_code(
+                        ErrorCode::Forbidden,
+                        "access denied",
+                    )
+                }
+            }
             Ok(None) => {
                 OperationResponse::error_with_code(ErrorCode::NotFound, "group not found")
             }
@@ -479,7 +595,10 @@ impl<'a> OperationHandler<'a> {
 
     // ── Dashboard ──────────────────────────────────────────────────
 
-    fn dashboard_get(&self) -> OperationResponse {
+    fn dashboard_get(&self, req: &OperationRequest) -> OperationResponse {
+        if let Some(err) = self.require_admin(req) {
+            return err;
+        }
         match self.store.get_dashboard_summary() {
             Ok(summary) => OperationResponse::success(serde_json::to_value(summary).unwrap()),
             Err(e) => OperationResponse::error(e.to_string()),

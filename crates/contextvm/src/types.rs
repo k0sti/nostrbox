@@ -1,5 +1,19 @@
 use serde::{Deserialize, Serialize};
 
+/// How the caller's identity was verified.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AuthSource {
+    /// Not yet determined (default when deserialized from JSON).
+    #[default]
+    Unknown,
+    /// NIP-98 HTTP Authorization header.
+    Nip98,
+    /// ContextVM Nostr relay transport (event signature).
+    ContextVm,
+    /// Local bypass (loopback address).
+    LocalBypass,
+}
+
 /// A ContextVM operation request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OperationRequest {
@@ -10,6 +24,9 @@ pub struct OperationRequest {
     pub params: serde_json::Value,
     /// Caller identity (pubkey), if authenticated
     pub caller: Option<String>,
+    /// How the caller's identity was verified. Set by the transport layer, not from JSON.
+    #[serde(skip)]
+    pub auth_source: AuthSource,
 }
 
 /// Structured error codes per Shared Spec.

@@ -5,6 +5,7 @@
  */
 
 import { callOpNostr, isTransportConnected } from "./contextvm";
+import { createNip98Auth } from "./nip98";
 import { loadSettings } from "./settings";
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "";
@@ -44,14 +45,28 @@ export async function callOp<T = unknown>(
     console.warn(`[nostrbox] ${op} → CVM selected but transport not connected, falling back to HTTP`);
   }
 
-  // HTTP fallback — include caller for auth-gated operations
+  // HTTP fallback — use NIP-98 auth header for caller identity
   const body: OperationRequest = { op, params };
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+
   if (currentCaller) {
-    body.caller = currentCaller;
+    // Build absolute URL for NIP-98 signing (must match server's expected URL)
+    const relUrl = `${API_BASE}/api/op`;
+    const fullUrl = relUrl.startsWith("http")
+      ? relUrl
+      : `${window.location.origin}${relUrl}`;
+    const auth = await createNip98Auth(fullUrl, "POST");
+    if (auth) {
+      headers["Authorization"] = auth;
+    } else {
+      // Signer unavailable — fall back to body caller (local bypass only)
+      body.caller = currentCaller;
+    }
   }
+
   const res = await fetch(`${API_BASE}/api/op`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify(body),
   });
   return res.json();

@@ -1,13 +1,15 @@
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::{
     Router,
-    extract::State,
+    extract::{ConnectInfo, State},
     extract::{FromRequest, ws::{WebSocket, WebSocketUpgrade, Message}},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json},
     routing::{get, post},
 };
+use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
@@ -15,11 +17,33 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 use nostr_sdk::ToBech32;
-use nostrbox_contextvm::{EmailConfig, OperationRequest, OperationResponse};
+use nostrbox_contextvm::{AuthSource, EmailConfig, ErrorCode, OperationRequest, OperationResponse};
 use nostrbox_contextvm::OperationHandler;
 use nostrbox_relay::config::RelayAccessConfig;
 use nostrbox_relay::setup::{RelayConfig, start_relay};
 use nostrbox_store::StorePool;
+
+/// HTTP auth (NIP-98) configuration.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct AuthConfig {
+    /// Maximum age of NIP-98 auth events in seconds.
+    pub auth_window_secs: u64,
+    /// Allow unauthenticated requests from loopback addresses.
+    pub local_bypass: bool,
+    /// Owner pubkey (npub or hex) — gets Owner role on startup.
+    pub owner_pubkey: Option<String>,
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            auth_window_secs: 60,
+            local_bypass: true,
+            owner_pubkey: None,
+        }
+    }
+}
 
 /// Server configuration.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -40,6 +64,9 @@ pub struct Config {
     /// Relay access control configuration.
     #[serde(default)]
     pub relay: RelayAccessConfig,
+    /// HTTP auth (NIP-98) configuration.
+    #[serde(default)]
+    pub auth: AuthConfig,
 }
 
 impl Default for Config {
@@ -54,6 +81,7 @@ impl Default for Config {
             public_url: None,
             email: EmailConfig::default(),
             relay: RelayAccessConfig::default(),
+            auth: AuthConfig::default(),
         }
     }
 }
@@ -104,6 +132,10 @@ struct AppState {
     local_relay_url: String,
     /// Email login configuration.
     email_config: Arc<EmailConfig>,
+    /// Public base URL for NIP-98 URL verification.
+    public_url: Option<String>,
+    /// HTTP auth configuration.
+    auth_config: AuthConfig,
 }
 
 #[tokio::main]
@@ -161,6 +193,47 @@ async fn main() {
             tracing::error!("failed to register server actor: {e}");
         } else {
             info!(pubkey = %server_pubkey, "server system actor registered");
+        }
+    }
+
+    // Register configured owner pubkey as Owner actor
+    if let Some(ref owner_spec) = config.auth.owner_pubkey {
+        let owner_hex = if owner_spec.starts_with("npub1") {
+            match nostr_sdk::PublicKey::parse(owner_spec) {
+                Ok(pk) => Some(pk.to_hex()),
+                Err(e) => {
+                    tracing::error!("invalid owner_pubkey in [auth] config: {e}");
+                    None
+                }
+            }
+        } else {
+            Some(owner_spec.clone())
+        };
+        if let Some(hex) = owner_hex {
+            let npub = nostr_sdk::PublicKey::parse(&hex)
+                .map(|pk| pk.to_bech32().unwrap_or_default())
+                .unwrap_or_default();
+            let store = pool.get().expect("failed to get store connection for owner actor");
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let actor = nostrbox_core::Actor {
+                pubkey: hex.clone(),
+                npub,
+                kind: nostrbox_core::ActorKind::Human,
+                global_role: nostrbox_core::GlobalRole::Owner,
+                status: nostrbox_core::ActorStatus::Active,
+                display_name: Some("owner".into()),
+                groups: vec![],
+                created_at: now,
+                updated_at: now,
+            };
+            if let Err(e) = store.upsert_actor(&actor) {
+                tracing::error!("failed to register owner actor: {e}");
+            } else {
+                info!(pubkey = %hex, "owner actor registered from config");
+            }
         }
     }
 
@@ -254,6 +327,8 @@ async fn main() {
         public_relay_url,
         local_relay_url,
         email_config,
+        public_url: config.public_url.clone(),
+        auth_config: config.auth.clone(),
     };
 
     // SPA fallback: serve index.html for non-API routes
@@ -277,7 +352,12 @@ async fn main() {
 
     // Keep relay alive for the lifetime of the server
     let _relay = relay;
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .unwrap();
 }
 
 /// WebSocket proxy + NIP-11 handler for /ws.
@@ -331,7 +411,7 @@ async fn ws_info(
         let info = serde_json::json!({
             "name": "nostrbox",
             "description": "Nostrbox community relay",
-            "supported_nips": [1, 9, 11, 42, 59],
+            "supported_nips": [1, 9, 11, 42, 59, 98],
             "software": "nostrbox",
             "version": env!("CARGO_PKG_VERSION"),
             "relay_url": state.public_relay_url,
@@ -457,6 +537,7 @@ async fn start_contextvm_transport(
             op: method,
             params: params.unwrap_or(serde_json::json!({})),
             caller: Some(client_pubkey),
+            auth_source: AuthSource::ContextVm,
         };
 
         // Dispatch on a blocking thread (pool hands out a connection)
@@ -595,7 +676,7 @@ async fn relay_info(
         let info = serde_json::json!({
             "name": "nostrbox",
             "description": "Nostrbox community relay",
-            "supported_nips": [1, 9, 11, 42],
+            "supported_nips": [1, 9, 11, 42, 98],
             "software": "nostrbox",
             "version": env!("CARGO_PKG_VERSION"),
             "relay_url": state.public_relay_url,
@@ -622,11 +703,159 @@ async fn relay_info(
     }
 }
 
-/// ContextVM operation endpoint.
+// ── NIP-98 HTTP Auth ─────────────────────────────────────
+
+/// Verify a NIP-98 `Authorization: Nostr <base64>` header.
+///
+/// Checks event kind (27235), signature, timestamp, URL and method tags.
+/// Returns the verified pubkey on success.
+fn verify_nip98(
+    auth_header: &str,
+    request_url: &str,
+    request_method: &str,
+    max_age_secs: u64,
+) -> Result<String, String> {
+    // 1. Strip "Nostr " prefix
+    let b64 = auth_header
+        .strip_prefix("Nostr ")
+        .ok_or("missing Nostr prefix")?;
+
+    // 2. Decode base64 → JSON
+    let json_bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .map_err(|e| format!("base64 decode: {e}"))?;
+    let json_str = String::from_utf8(json_bytes)
+        .map_err(|e| format!("utf8: {e}"))?;
+
+    // 3. Parse as Nostr event and verify signature
+    let event: nostr_sdk::Event = serde_json::from_str(&json_str)
+        .map_err(|e| format!("event parse: {e}"))?;
+    if !event.verify_id() {
+        return Err("event id verification failed".into());
+    }
+    if !event.verify_signature() {
+        return Err("signature verification failed".into());
+    }
+
+    // 4. Verify kind == 27235
+    if event.kind.as_u16() != 27235 {
+        return Err(format!("wrong kind: {}", event.kind.as_u16()));
+    }
+
+    // 5. Verify timestamp
+    let now = nostr_sdk::Timestamp::now().as_u64();
+    let event_time = event.created_at.as_u64();
+    if now.abs_diff(event_time) > max_age_secs {
+        return Err("auth event expired".into());
+    }
+
+    // 6. Extract tags from the raw JSON (avoids nostr-sdk Tag API complexity)
+    let json_val: serde_json::Value =
+        serde_json::from_str(&json_str).map_err(|e| format!("json: {e}"))?;
+    let tags = json_val
+        .get("tags")
+        .and_then(|t| t.as_array())
+        .ok_or("missing tags")?;
+
+    // 7. Verify URL tag
+    let url_tag = tags
+        .iter()
+        .find_map(|t| {
+            let arr = t.as_array()?;
+            if arr.len() >= 2 && arr[0].as_str()? == "u" {
+                arr[1].as_str()
+            } else {
+                None
+            }
+        })
+        .ok_or("missing u tag")?;
+    if url_tag != request_url {
+        return Err(format!(
+            "url mismatch: signed={url_tag}, expected={request_url}"
+        ));
+    }
+
+    // 8. Verify method tag
+    let method_tag = tags
+        .iter()
+        .find_map(|t| {
+            let arr = t.as_array()?;
+            if arr.len() >= 2 && arr[0].as_str()? == "method" {
+                arr[1].as_str()
+            } else {
+                None
+            }
+        })
+        .ok_or("missing method tag")?;
+    if !method_tag.eq_ignore_ascii_case(request_method) {
+        return Err(format!(
+            "method mismatch: signed={method_tag}, expected={request_method}"
+        ));
+    }
+
+    // 9. Return verified pubkey
+    Ok(event.pubkey.to_hex())
+}
+
+/// Reconstruct the expected request URL for NIP-98 verification.
+fn build_request_url(state: &AppState, headers: &HeaderMap) -> String {
+    if let Some(ref base) = state.public_url {
+        format!("{}/api/op", base.trim_end_matches('/'))
+    } else {
+        let host = headers
+            .get("host")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("localhost");
+        format!("http://{host}/api/op")
+    }
+}
+
+/// ContextVM operation endpoint with NIP-98 authentication.
+///
+/// Caller identity is resolved in priority order:
+/// 1. NIP-98 Authorization header → cryptographically verified pubkey
+/// 2. Local bypass (loopback IP, no auth header) → trust body `caller` field
+/// 3. Remote without auth → anonymous (caller = None)
 async fn handle_operation(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(req): Json<OperationRequest>,
 ) -> (StatusCode, Json<OperationResponse>) {
+    let mut req = req;
+    let is_local = addr.ip().is_loopback();
+
+    // Resolve caller identity from NIP-98 or local bypass
+    if let Some(auth) = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .filter(|v| v.starts_with("Nostr "))
+    {
+        let request_url = build_request_url(&state, &headers);
+        match verify_nip98(auth, &request_url, "POST", state.auth_config.auth_window_secs) {
+            Ok(pubkey) => {
+                req.caller = Some(pubkey);
+                req.auth_source = AuthSource::Nip98;
+            }
+            Err(e) => {
+                tracing::warn!("NIP-98 auth failed: {e}");
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    Json(OperationResponse::error_with_code(
+                        ErrorCode::Unauthorized,
+                        format!("NIP-98 auth failed: {e}"),
+                    )),
+                );
+            }
+        }
+    } else if is_local && state.auth_config.local_bypass {
+        // Local bypass: keep body caller for backward compat
+        req.auth_source = AuthSource::LocalBypass;
+    } else {
+        // Remote without auth (or local with bypass disabled): anonymous
+        req.caller = None;
+    }
+
     let pool = state.pool.clone();
     let keys = state.keys.clone();
     let email_config = state.email_config.clone();
@@ -643,6 +872,8 @@ async fn handle_operation(
     .unwrap();
     let status = if resp.ok {
         StatusCode::OK
+    } else if resp.error_code.as_deref() == Some("unauthorized") {
+        StatusCode::UNAUTHORIZED
     } else {
         StatusCode::BAD_REQUEST
     };
