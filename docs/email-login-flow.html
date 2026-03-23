@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nostrbox — Email Login Flow</title>
+<style>
+  :root {
+    --bg: #fafafa;
+    --fg: #1a1a1a;
+    --muted: #666;
+    --accent: #7c3aed;
+    --border: #e5e5e5;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    line-height: 1.5;
+  }
+  header {
+    padding: 2.5rem 2rem 1.5rem;
+    text-align: center;
+    border-bottom: 1px solid var(--border);
+  }
+  header h1 {
+    font-size: 1.5rem;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+  header h1 span { color: var(--accent); }
+  header p {
+    color: var(--muted);
+    font-size: 0.875rem;
+    margin-top: 0.4rem;
+  }
+  .section {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem 1rem;
+  }
+  .section h2 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin-bottom: 0.3rem;
+  }
+  .section .subtitle {
+    color: var(--muted);
+    font-size: 0.8rem;
+    margin-bottom: 1rem;
+  }
+  .section-divider {
+    max-width: 1100px;
+    margin: 0 auto;
+    border-top: 1px solid var(--border);
+  }
+  .diagram-container {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 0 1.5rem 2rem;
+  }
+  .mermaid {
+    display: flex;
+    justify-content: center;
+  }
+  .mermaid svg {
+    max-width: 100%;
+    height: auto;
+  }
+  .phase-tag {
+    display: inline-block;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 0.15rem 0.5rem;
+    border-radius: 3px;
+    margin-right: 0.5rem;
+    position: relative;
+    top: -1px;
+  }
+  .tag-reg { background: #dbeafe; color: #1d4ed8; }
+  .tag-login { background: #dcfce7; color: #15803d; }
+  .tag-sov { background: #fef9c3; color: #a16207; }
+  footer {
+    text-align: center;
+    padding: 1.5rem;
+    font-size: 0.75rem;
+    color: var(--muted);
+    border-top: 1px solid var(--border);
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1><span>Nostrbox</span> Email Login Flow</h1>
+  <p>Three phases: Registration → Magic Link Login → Key Self-Hosting</p>
+</header>
+
+<!-- Phase 1: Registration -->
+<div class="section">
+  <h2><span class="phase-tag tag-reg">Phase 1</span> Registration</h2>
+  <p class="subtitle">Client generates keys, encrypts with password, server stores encrypted blob</p>
+</div>
+<div class="diagram-container">
+  <pre class="mermaid">
+sequenceDiagram
+    participant U as 👤 User
+    participant W as 🌐 Web App
+    participant S as ⚙️ Server
+
+    U->>W: Click "Register with Email"
+    W->>W: Generate Nostr keypair (nsec / npub)
+    U->>W: Enter password + email address
+    W->>W: Encrypt nsec → ncryptsec (NIP-49)
+    Note over W: Password never leaves browser
+    W->>S: email.register { npub, ncryptsec, email }
+    S->>S: Store email_identity record
+    S->>S: Create registration request
+    S-->>W: ✓ Registered (pending approval)
+    Note over S: Admin reviews and approves
+  </pre>
+</div>
+
+<div class="section-divider"></div>
+
+<!-- Phase 2: Login -->
+<div class="section">
+  <h2><span class="phase-tag tag-login">Phase 2</span> Magic Link Login</h2>
+  <p class="subtitle">Server sends single-use token via email, client redeems and decrypts keys locally</p>
+</div>
+<div class="diagram-container">
+  <pre class="mermaid">
+sequenceDiagram
+    participant U as 👤 User
+    participant W as 🌐 Web App
+    participant S as ⚙️ Server
+    participant E as 📧 Email
+
+    U->>W: Enter email → "Send login link"
+    W->>S: email.login { email }
+    S->>S: Generate token (256-bit, 15 min TTL)
+    S->>E: Send magic link via Resend
+    S-->>W: ✓ Check your email
+    Note over S: Same response whether<br/>email exists or not
+
+    U->>E: Open inbox → click magic link
+    E->>W: Redirect with token
+    W->>S: email.redeem { token }
+    S->>S: Validate & consume token
+    S-->>W: Return ncryptsec + npub
+
+    U->>W: Enter password
+    W->>W: Decrypt ncryptsec → nsec
+    W->>W: Store nsec in sessionStorage
+    Note over W: Signs all Nostr events:<br/>NIP-42 auth, operations, etc.
+  </pre>
+</div>
+
+<div class="section-divider"></div>
+
+<!-- Phase 3: Go Sovereign -->
+<div class="section">
+  <h2><span class="phase-tag tag-sov">Phase 3</span> Go Sovereign</h2>
+  <p class="subtitle">User exports keys to NIP-07 extension or Amber, server deletes encrypted keys</p>
+</div>
+<div class="diagram-container">
+  <pre class="mermaid">
+sequenceDiagram
+    participant U as 👤 User
+    participant W as 🌐 Web App
+    participant S as ⚙️ Server
+
+    U->>W: Click "Go Sovereign"
+    W-->>U: Display nsec (bech32)
+    Note over U: Save to NIP-07 extension<br/>or Amber signer
+    U->>W: Confirm "I've saved my keys"
+    W->>S: email.clear (signed by pubkey)
+    S->>S: Delete ncryptsec from server
+    S-->>W: ✓ Keys removed
+    Note over U,S: Server no longer holds keys<br/>Login via NIP-07 / Amber only
+  </pre>
+</div>
+
+<footer>
+  Nostrbox · Atlantis Labs · The server never sees plaintext keys
+</footer>
+
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'neutral',
+    sequence: {
+      mirrorActors: false,
+      actorMargin: 80,
+      messageFontSize: 13,
+      noteFontSize: 12,
+      wrap: true,
+      width: 220,
+    },
+    themeVariables: {
+      fontFamily: '-apple-system, BlinkMacSystemFont, Inter, sans-serif',
+      fontSize: '13px',
+    }
+  });
+</script>
+
+</body>
+</html>
