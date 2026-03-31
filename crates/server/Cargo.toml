@@ -19,12 +19,13 @@ axum = { workspace = true }
 tower-http = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-toml_parse = { workspace = true }
 nostr-sdk = { workspace = true }
 nostrbox-core = { workspace = true }
 nostrbox-nostr = { workspace = true }
 nostrbox-store = { workspace = true }
-nostrbox-contextvm = { workspace = true }
 nostrbox-relay = { workspace = true }
-contextvm-sdk = { workspace = true }
+nostrbox-ext-management = { workspace = true }
+nostrbox-ext-email-login = { workspace = true }
+nostrbox-ext-contextvm = { workspace = true }
+nostrbox-ext-webui = { workspace = true }
 base64 = { workspace = true }

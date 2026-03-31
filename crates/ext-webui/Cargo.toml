@@ -1,0 +1,8 @@
+[package]
+name = "nostrbox-ext-webui"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+axum = { workspace = true }
+tower-http = { workspace = true }

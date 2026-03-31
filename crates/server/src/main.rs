@@ -1,135 +1,23 @@
+//! NostrBox server: composition root.
+
+mod auth;
+mod http;
+mod ingestion;
+
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use axum::{
-    Router,
-    extract::{ConnectInfo, State},
-    http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Json},
-    routing::{get, post},
-};
-use base64::Engine;
+use axum::{Router, routing::{get, post}};
 use tower_http::cors::CorsLayer;
-use tower_http::services::{ServeDir, ServeFile};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 use nostr_sdk::ToBech32;
-use nostrbox_contextvm::{AuthSource, EmailConfig, ErrorCode, OperationRequest, OperationResponse};
-use nostrbox_contextvm::OperationHandler;
+use nostrbox_core::Config;
 use nostrbox_relay::config::{RelayAccessConfig, RelayConfig};
 use nostrbox_store::StorePool;
 
-/// HTTP auth (NIP-98) configuration.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(default)]
-pub struct AuthConfig {
-    /// Maximum age of NIP-98 auth events in seconds.
-    pub auth_window_secs: u64,
-    /// Allow unauthenticated requests from loopback addresses.
-    pub local_bypass: bool,
-    /// Owner pubkey (npub or hex) — gets Owner role on startup.
-    pub owner_pubkey: Option<String>,
-}
-
-impl Default for AuthConfig {
-    fn default() -> Self {
-        Self {
-            auth_window_secs: 60,
-            local_bypass: true,
-            owner_pubkey: None,
-        }
-    }
-}
-
-/// Server configuration.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(default)]
-pub struct Config {
-    pub bind_address: String,
-    pub db_path: String,
-    pub web_dist_path: String,
-    pub identity_nsec: Option<String>,
-    pub relay_urls: Vec<String>,
-    /// Public base URL (e.g. "https://nostrbox.atlantislabs.space").
-    /// Used to derive the public relay WebSocket URL (wss://.../ws).
-    pub public_url: Option<String>,
-    /// Email login configuration.
-    #[serde(default)]
-    pub email: EmailConfig,
-    /// Relay access control configuration.
-    #[serde(default)]
-    pub relay: RelayAccessConfig,
-    /// HTTP auth (NIP-98) configuration.
-    #[serde(default)]
-    pub auth: AuthConfig,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            bind_address: "0.0.0.0:3000".into(),
-            db_path: "nostrbox.db".into(),
-            web_dist_path: "web/dist".into(),
-            identity_nsec: None,
-            relay_urls: vec![],
-            public_url: None,
-            email: EmailConfig::default(),
-            relay: RelayAccessConfig::default(),
-            auth: AuthConfig::default(),
-        }
-    }
-}
-
-impl Config {
-    pub fn load() -> Self {
-        let path = std::env::var("NOSTRBOX_CONFIG").unwrap_or_else(|_| "nostrbox.toml".into());
-        match std::fs::read_to_string(&path) {
-            Ok(contents) => match toml_parse::from_str(&contents) {
-                Ok(config) => {
-                    info!("loaded config from {path}");
-                    config
-                }
-                Err(e) => {
-                    tracing::warn!("failed to parse config {path}: {e}, using defaults");
-                    Self::default()
-                }
-            },
-            Err(_) => {
-                info!("no config file found at {path}, using defaults");
-                Self::default()
-            }
-        }
-    }
-
-    /// Derive the public relay URL from public_url config.
-    fn public_relay_url(&self) -> String {
-        if let Some(ref base) = self.public_url {
-            let scheme = if base.starts_with("https://") { "wss" } else { "ws" };
-            let host = base
-                .trim_start_matches("https://")
-                .trim_start_matches("http://")
-                .trim_end_matches('/');
-            format!("{scheme}://{host}/relay")
-        } else {
-            format!("ws://{}/relay", self.bind_address)
-        }
-    }
-}
-
-#[derive(Clone)]
-struct AppState {
-    pool: StorePool,
-    keys: Option<Arc<nostr_sdk::Keys>>,
-    /// Public-facing relay URL (for NIP-11 / client use).
-    public_relay_url: String,
-    /// Email login configuration.
-    email_config: Arc<EmailConfig>,
-    /// Public base URL for NIP-98 URL verification.
-    public_url: Option<String>,
-    /// HTTP auth configuration.
-    auth_config: AuthConfig,
-}
+use http::AppState;
 
 #[tokio::main]
 async fn main() {
@@ -159,96 +47,37 @@ async fn main() {
         None
     };
 
-    // Open store pool (4 connections, WAL mode for concurrent reads)
+    // Open store pool
     let pool = StorePool::open(&config.db_path, 4).expect("failed to open store pool");
 
-    // Ensure the server's own pubkey is registered as a system actor (owner role)
+    // Register server + owner actors
     if let Some(ref keys) = keys {
-        let server_pubkey = keys.public_key().to_hex();
-        let server_npub = keys.public_key().to_bech32().unwrap_or_default();
-        let store = pool.get().expect("failed to get store connection for server actor");
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let actor = nostrbox_core::Actor {
-            pubkey: server_pubkey.clone(),
-            npub: server_npub,
-            kind: nostrbox_core::ActorKind::System,
-            global_role: nostrbox_core::GlobalRole::Owner,
-            status: nostrbox_core::ActorStatus::Active,
-            display_name: Some("nostrbox".into()),
-            groups: vec![],
-            created_at: now,
-            updated_at: now,
-        };
-        if let Err(e) = store.upsert_actor(&actor) {
-            tracing::error!("failed to register server actor: {e}");
-        } else {
-            info!(pubkey = %server_pubkey, "server system actor registered");
-        }
+        register_actor(&pool, &keys.public_key().to_hex(), &keys.public_key().to_bech32().unwrap_or_default(),
+            nostrbox_core::ActorKind::System, "nostrbox");
     }
-
-    // Register configured owner pubkey as Owner actor
     if let Some(ref owner_spec) = config.auth.owner_pubkey {
-        let owner_hex = if owner_spec.starts_with("npub1") {
-            match nostr_sdk::PublicKey::parse(owner_spec) {
-                Ok(pk) => Some(pk.to_hex()),
-                Err(e) => {
-                    tracing::error!("invalid owner_pubkey in [auth] config: {e}");
-                    None
-                }
-            }
-        } else {
-            Some(owner_spec.clone())
-        };
-        if let Some(hex) = owner_hex {
+        if let Some(hex) = resolve_pubkey_hex(owner_spec) {
             let npub = nostr_sdk::PublicKey::parse(&hex)
-                .map(|pk| pk.to_bech32().unwrap_or_default())
-                .unwrap_or_default();
-            let store = pool.get().expect("failed to get store connection for owner actor");
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            let actor = nostrbox_core::Actor {
-                pubkey: hex.clone(),
-                npub,
-                kind: nostrbox_core::ActorKind::Human,
-                global_role: nostrbox_core::GlobalRole::Owner,
-                status: nostrbox_core::ActorStatus::Active,
-                display_name: Some("owner".into()),
-                groups: vec![],
-                created_at: now,
-                updated_at: now,
-            };
-            if let Err(e) = store.upsert_actor(&actor) {
-                tracing::error!("failed to register owner actor: {e}");
-            } else {
-                info!(pubkey = %hex, "owner actor registered from config");
-            }
+                .map(|pk| pk.to_bech32().unwrap_or_default()).unwrap_or_default();
+            register_actor(&pool, &hex, &npub, nostrbox_core::ActorKind::Human, "owner");
         }
     }
 
-    // Build relay config
-    let server_pubkey = keys
-        .as_ref()
-        .map(|k| k.public_key().to_hex())
-        .unwrap_or_default();
+    // Relay
+    let server_pubkey = keys.as_ref().map(|k| k.public_key().to_hex()).unwrap_or_default();
     let public_relay_url = config.public_relay_url();
+    let relay_access: RelayAccessConfig = serde_json::from_value(config.relay.clone()).unwrap_or_default();
     let relay_config = RelayConfig {
         name: "nostrbox".into(),
         description: "Nostrbox community relay".into(),
-        server_pubkey: server_pubkey.clone(),
+        server_pubkey,
         public_relay_url: public_relay_url.clone(),
-        access: config.relay.clone(),
+        access: relay_access,
     };
-
-    // Build relay routes (WebSocket on /ws with embedded NIP-11)
     let relay_router = nostrbox_relay::relay_routes(pool.clone(), relay_config);
     info!(url = %public_relay_url, "relay ready");
 
-    // Build email config (env var overrides config file for API key)
+    // Email config (env override)
     let mut email_config = config.email.clone();
     if let Ok(key) = std::env::var("RESEND_API_KEY") {
         email_config.resend_api_key = key;
@@ -259,78 +88,12 @@ async fn main() {
         }
     }
     let email_config = Arc::new(email_config);
+    info!("email login {}", if email_config.is_enabled() { "enabled (Resend)" } else { "disabled" });
 
-    if email_config.is_enabled() {
-        info!("email login enabled (Resend)");
-    } else {
-        info!("email login disabled (no resend_api_key)");
-    }
-
-    // Start ContextVM transport (if identity is configured)
-    if let Some(ref keys) = keys {
-        // ContextVM transport needs a relay URL to connect to.
-        // Use relay_urls from config, or fall back to the local bind address.
-        let transport_relay_url = if !config.relay_urls.is_empty() {
-            config.relay_urls[0].clone()
-        } else {
-            format!("ws://{}/relay", config.bind_address)
-        };
-        let transport_pool = pool.clone();
-        let transport_keys = keys.clone();
-        let transport_email_config = email_config.clone();
-        tokio::spawn(async move {
-            if let Err(e) =
-                start_contextvm_transport(&transport_relay_url, &transport_keys, transport_pool, transport_email_config)
-                    .await
-            {
-                tracing::error!("ContextVM transport failed: {e}");
-            }
-        });
-    }
-
-    // Start event ingestion pipeline
-    {
-        let ingestion_pool = pool.clone();
-        let ingestion_keys = keys.clone();
-        let ingestion_relay_url = if !config.relay_urls.is_empty() {
-            config.relay_urls[0].clone()
-        } else {
-            format!("ws://{}/relay", config.bind_address)
-        };
-        tokio::spawn(async move {
-            if let Err(e) = start_event_ingestion(ingestion_keys.as_ref().map(|v| &**v), &ingestion_relay_url, ingestion_pool).await {
-                tracing::error!("event ingestion failed: {e}");
-            }
-        });
-    }
-
-    // Start cleanup job for stale login tokens and abandoned email registrations
-    {
-        let cleanup_pool = pool.clone();
-        let cleanup_email_config = email_config.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
-            loop {
-                interval.tick().await;
-                let pool = cleanup_pool.clone();
-                let ttl = cleanup_email_config.abandoned_ttl();
-                if let Err(e) = tokio::task::spawn_blocking(move || {
-                    let store = pool.get()?;
-                    let tokens = store.cleanup_login_tokens().unwrap_or(0);
-                    let emails = store.cleanup_abandoned_email_identities(ttl).unwrap_or(0);
-                    let audit = store.cleanup_relay_audit_log(86400 * 30).unwrap_or(0); // 30 days
-                    if tokens > 0 || emails > 0 || audit > 0 {
-                        info!(tokens, emails, audit, "cleanup completed");
-                    }
-                    Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
-                })
-                .await
-                {
-                    tracing::warn!("email cleanup task failed: {e}");
-                }
-            }
-        });
-    }
+    // Background tasks
+    spawn_contextvm_transport(&config, &keys, &pool, &email_config);
+    spawn_event_ingestion(&config, &keys, &pool);
+    spawn_cleanup_job(&pool, &email_config);
 
     let state = AppState {
         pool,
@@ -341,406 +104,119 @@ async fn main() {
         auth_config: config.auth.clone(),
     };
 
-    // SPA fallback: serve index.html for non-API routes
-    let spa_fallback = ServeFile::new(format!("{}/index.html", config.web_dist_path));
-    let serve_dir = ServeDir::new(&config.web_dist_path).fallback(spa_fallback);
-
-    // Build router — merge relay routes (handles /ws) into the app router.
-    // relay_router has its own state (RelayState) already applied, so merge
-    // after with_state resolves AppState → Router<()>.
+    // Router
     let app = Router::new()
-        .route("/health", get(health))
-        .route("/api/op", post(handle_operation))
-        .route("/api/relay-info", get(relay_info))
-        .fallback_service(serve_dir)
+        .route("/health", get(http::health))
+        .route("/api/op", post(http::handle_operation))
+        .route("/api/relay-info", get(http::relay_info))
         .with_state(state)
         .merge(relay_router)
+        .merge(nostrbox_ext_webui::webui_routes(&config.web_dist_path))
         .layer(CorsLayer::permissive());
 
     info!("nostrbox server starting on {}", config.bind_address);
-    let listener = tokio::net::TcpListener::bind(&config.bind_address)
-        .await
-        .unwrap();
-
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .await
-    .unwrap();
+    let listener = tokio::net::TcpListener::bind(&config.bind_address).await.unwrap();
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await.unwrap();
 }
 
-/// Start the ContextVM transport: listen for incoming JSON-RPC requests over Nostr
-/// and dispatch them to the OperationHandler.
-async fn start_contextvm_transport(
-    relay_url: &str,
-    keys: &nostr_sdk::Keys,
-    pool: StorePool,
-    email_config: Arc<EmailConfig>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    use contextvm_sdk::core::types::{JsonRpcMessage, JsonRpcResponse, ServerInfo};
-    use contextvm_sdk::transport::server::{NostrServerTransport, NostrServerTransportConfig};
+// ── Helpers ─────────────────────────────────────────────────────────
 
-    let config = NostrServerTransportConfig {
-        relay_urls: vec![relay_url.to_string()],
-        server_info: Some(ServerInfo {
-            name: Some("nostrbox".into()),
-            version: Some(env!("CARGO_PKG_VERSION").into()),
-            about: Some("Nostrbox community server".into()),
-            ..Default::default()
-        }),
-        ..Default::default()
+fn register_actor(pool: &StorePool, pubkey: &str, npub: &str, kind: nostrbox_core::ActorKind, label: &str) {
+    let store = pool.get().expect("failed to get store connection");
+    let now = now_secs();
+    let actor = nostrbox_core::Actor {
+        pubkey: pubkey.to_string(),
+        npub: npub.to_string(),
+        kind,
+        global_role: nostrbox_core::GlobalRole::Owner,
+        status: nostrbox_core::ActorStatus::Active,
+        display_name: Some(label.to_string()),
+        groups: vec![],
+        created_at: now,
+        updated_at: now,
     };
+    match store.upsert_actor(&actor) {
+        Ok(()) => info!(pubkey = %pubkey, "{label} actor registered"),
+        Err(e) => tracing::error!("failed to register {label} actor: {e}"),
+    }
+}
 
-    let mut transport = NostrServerTransport::new(keys.clone(), config).await?;
-    transport.start().await?;
-    info!("ContextVM transport started");
-
-    let mut rx = transport
-        .take_message_receiver()
-        .ok_or("failed to take message receiver")?;
-
-    while let Some(incoming) = rx.recv().await {
-        let event_id = incoming.event_id.clone();
-
-        // Extract method and params from the JSON-RPC request
-        let (id, method, params) = match &incoming.message {
-            JsonRpcMessage::Request(req) => {
-                (req.id.clone(), req.method.clone(), req.params.clone())
-            }
-            _ => continue, // skip non-requests
-        };
-
-        let client_pubkey = incoming.client_pubkey.clone();
-
-        // Map JSON-RPC method to ContextVM operation
-        let op_req = OperationRequest {
-            op: method,
-            params: params.unwrap_or(serde_json::json!({})),
-            caller: Some(client_pubkey),
-            auth_source: AuthSource::ContextVm,
-        };
-
-        // Dispatch on a blocking thread (pool hands out a connection)
-        let op_pool = pool.clone();
-        let keys_clone = keys.clone();
-        let op_email_config = email_config.clone();
-        let resp = tokio::task::spawn_blocking(move || {
-            let store = op_pool.get().expect("failed to get store connection");
-            let handler = OperationHandler::with_keys(&store, &keys_clone)
-                .with_email(&op_email_config);
-            handler.handle(&op_req)
-        })
-        .await
-        .unwrap();
-
-        // Send JSON-RPC response
-        let response = JsonRpcMessage::Response(JsonRpcResponse {
-            jsonrpc: "2.0".to_string(),
-            id,
-            result: serde_json::to_value(&resp).unwrap_or_default(),
-        });
-
-        if let Err(e) = transport.send_response(&event_id, response).await {
-            tracing::warn!("failed to send ContextVM response: {e}");
+fn resolve_pubkey_hex(spec: &str) -> Option<String> {
+    if spec.starts_with("npub1") {
+        match nostr_sdk::PublicKey::parse(spec) {
+            Ok(pk) => Some(pk.to_hex()),
+            Err(e) => { tracing::error!("invalid owner_pubkey: {e}"); None }
         }
+    } else {
+        Some(spec.to_string())
     }
-
-    transport.close().await?;
-    Ok(())
 }
 
-/// Subscribe to the relay for app-relevant kinds and ingest events into the store.
-async fn start_event_ingestion(
-    keys: Option<&nostr_sdk::Keys>,
-    relay_url: &str,
-    pool: StorePool,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    use nostr_sdk::{Client, ClientBuilder, Filter, RelayPoolNotification};
-    use nostrbox_nostr::kinds;
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
 
-    let client = if let Some(keys) = keys {
-        ClientBuilder::new().signer(keys.clone()).build()
+fn spawn_contextvm_transport(
+    config: &Config, keys: &Option<Arc<nostr_sdk::Keys>>,
+    pool: &StorePool, email_config: &Arc<nostrbox_core::EmailConfig>,
+) {
+    let Some(keys) = keys.clone() else { return };
+    let relay_url = if !config.relay_urls.is_empty() {
+        config.relay_urls[0].clone()
     } else {
-        Client::default()
+        format!("ws://{}/relay", config.bind_address)
     };
-    client.add_relay(relay_url).await?;
-    client.connect().await;
-
-    // Subscribe to app-relevant kinds
-    let filter = Filter::new().kinds(vec![
-        kinds::METADATA,         // kind 0
-        kinds::ACTOR_ROLE,       // 30078
-        kinds::GROUP_DEFINITION, // 30080
-        kinds::GROUP_MEMBERSHIP, // 30081
-    ]);
-    client.subscribe(filter, None).await?;
-
-    info!("event ingestion started");
-
-    let mut notifications = client.notifications();
-    while let Ok(notification) = notifications.recv().await {
-        let RelayPoolNotification::Event { event, .. } = notification else {
-            continue;
-        };
-
-        let pool = pool.clone();
-        tokio::task::spawn_blocking(move || {
-            let store = match pool.get() {
-                Ok(s) => s,
-                Err(e) => {
-                    tracing::warn!("failed to get store connection for ingestion: {e}");
-                    return;
-                }
-            };
-
-            // Store the raw event
-            let tags_json = serde_json::to_string(&event.tags).unwrap_or_default();
-            let _ = store.store_event(
-                &event.id.to_hex(),
-                &event.pubkey.to_hex(),
-                event.kind.as_u16() as u64,
-                event.created_at.as_u64(),
-                &event.content,
-                &tags_json,
-                &event.sig.to_string(),
-            );
-
-            // Process by kind
-            let pubkey_hex = event.pubkey.to_hex();
-            match event.kind {
-                k if k == kinds::METADATA => {
-                    // Kind 0: update actor display_name from metadata
-                    if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&event.content) {
-                        if let Some(name) = meta
-                            .get("display_name")
-                            .or_else(|| meta.get("name"))
-                            .and_then(|v| v.as_str())
-                        {
-                            if let Err(e) = store.update_actor_display_name(&pubkey_hex, name) {
-                                tracing::debug!("kind-0 display_name update skipped: {e}");
-                            } else {
-                                info!(pubkey = %pubkey_hex, name, "ingested kind-0 metadata");
-                            }
-                        }
-                    }
-                }
-                _ => {
-                    // Other app kinds: just store (already done above)
-                    info!(kind = event.kind.as_u16(), id = %event.id, "ingested event");
-                }
-            }
-        })
-        .await
-        .ok();
-    }
-
-    Ok(())
+    let pool = pool.clone();
+    let email_config = email_config.clone();
+    tokio::spawn(async move {
+        if let Err(e) = nostrbox_ext_contextvm::start_contextvm_transport(&relay_url, &keys, pool, email_config).await {
+            tracing::error!("ContextVM transport failed: {e}");
+        }
+    });
 }
 
-async fn health() -> &'static str {
-    "ok"
-}
-
-/// NIP-11 relay information document.
-async fn relay_info(
-    headers: HeaderMap,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
-    let accept = headers
-        .get("accept")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-
-    let server_pubkey = state
-        .keys
-        .as_ref()
-        .map(|k| k.public_key().to_hex())
-        .unwrap_or_default();
-
-    if accept.contains("application/nostr+json") {
-        let info = serde_json::json!({
-            "name": "nostrbox",
-            "description": "Nostrbox community relay",
-            "supported_nips": [1, 9, 11, 42, 98],
-            "software": "nostrbox",
-            "version": env!("CARGO_PKG_VERSION"),
-            "relay_url": state.public_relay_url,
-            "pubkey": server_pubkey,
-        });
-        (
-            StatusCode::OK,
-            [("content-type", "application/nostr+json")],
-            serde_json::to_string(&info).unwrap(),
-        )
-            .into_response()
+fn spawn_event_ingestion(
+    config: &Config, keys: &Option<Arc<nostr_sdk::Keys>>,
+    pool: &StorePool,
+) {
+    let keys = keys.clone();
+    let relay_url = if !config.relay_urls.is_empty() {
+        config.relay_urls[0].clone()
     } else {
-        (
-            StatusCode::OK,
-            [("content-type", "application/json")],
-            serde_json::json!({
-                "relay_url": state.public_relay_url,
-                "pubkey": server_pubkey,
-                "status": "running",
-            })
-            .to_string(),
-        )
-            .into_response()
-    }
+        format!("ws://{}/relay", config.bind_address)
+    };
+    let pool = pool.clone();
+    tokio::spawn(async move {
+        if let Err(e) = ingestion::start_event_ingestion(keys.as_ref().map(|v| &**v), &relay_url, pool).await {
+            tracing::error!("event ingestion failed: {e}");
+        }
+    });
 }
 
-// ── NIP-98 HTTP Auth ─────────────────────────────────────
-
-/// Verify a NIP-98 `Authorization: Nostr <base64>` header.
-fn verify_nip98(
-    auth_header: &str,
-    request_url: &str,
-    request_method: &str,
-    max_age_secs: u64,
-) -> Result<String, String> {
-    let b64 = auth_header
-        .strip_prefix("Nostr ")
-        .ok_or("missing Nostr prefix")?;
-
-    let json_bytes = base64::engine::general_purpose::STANDARD
-        .decode(b64)
-        .map_err(|e| format!("base64 decode: {e}"))?;
-    let json_str = String::from_utf8(json_bytes)
-        .map_err(|e| format!("utf8: {e}"))?;
-
-    let event: nostr_sdk::Event = serde_json::from_str(&json_str)
-        .map_err(|e| format!("event parse: {e}"))?;
-    if !event.verify_id() {
-        return Err("event id verification failed".into());
-    }
-    if !event.verify_signature() {
-        return Err("signature verification failed".into());
-    }
-
-    if event.kind.as_u16() != 27235 {
-        return Err(format!("wrong kind: {}", event.kind.as_u16()));
-    }
-
-    let now = nostr_sdk::Timestamp::now().as_u64();
-    let event_time = event.created_at.as_u64();
-    if now.abs_diff(event_time) > max_age_secs {
-        return Err("auth event expired".into());
-    }
-
-    let json_val: serde_json::Value =
-        serde_json::from_str(&json_str).map_err(|e| format!("json: {e}"))?;
-    let tags = json_val
-        .get("tags")
-        .and_then(|t| t.as_array())
-        .ok_or("missing tags")?;
-
-    let url_tag = tags
-        .iter()
-        .find_map(|t| {
-            let arr = t.as_array()?;
-            if arr.len() >= 2 && arr[0].as_str()? == "u" {
-                arr[1].as_str()
-            } else {
-                None
-            }
-        })
-        .ok_or("missing u tag")?;
-    if url_tag != request_url {
-        return Err(format!(
-            "url mismatch: signed={url_tag}, expected={request_url}"
-        ));
-    }
-
-    let method_tag = tags
-        .iter()
-        .find_map(|t| {
-            let arr = t.as_array()?;
-            if arr.len() >= 2 && arr[0].as_str()? == "method" {
-                arr[1].as_str()
-            } else {
-                None
-            }
-        })
-        .ok_or("missing method tag")?;
-    if !method_tag.eq_ignore_ascii_case(request_method) {
-        return Err(format!(
-            "method mismatch: signed={method_tag}, expected={request_method}"
-        ));
-    }
-
-    Ok(event.pubkey.to_hex())
-}
-
-fn build_request_url(state: &AppState, headers: &HeaderMap) -> String {
-    if let Some(ref base) = state.public_url {
-        format!("{}/api/op", base.trim_end_matches('/'))
-    } else {
-        let host = headers
-            .get("host")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("localhost");
-        format!("http://{host}/api/op")
-    }
-}
-
-/// ContextVM operation endpoint with NIP-98 authentication.
-async fn handle_operation(
-    State(state): State<AppState>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    headers: HeaderMap,
-    Json(req): Json<OperationRequest>,
-) -> (StatusCode, Json<OperationResponse>) {
-    let mut req = req;
-    let is_local = addr.ip().is_loopback();
-
-    if let Some(auth) = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .filter(|v| v.starts_with("Nostr "))
-    {
-        let request_url = build_request_url(&state, &headers);
-        match verify_nip98(auth, &request_url, "POST", state.auth_config.auth_window_secs) {
-            Ok(pubkey) => {
-                req.caller = Some(pubkey);
-                req.auth_source = AuthSource::Nip98;
-            }
-            Err(e) => {
-                tracing::warn!("NIP-98 auth failed: {e}");
-                return (
-                    StatusCode::UNAUTHORIZED,
-                    Json(OperationResponse::error_with_code(
-                        ErrorCode::Unauthorized,
-                        format!("NIP-98 auth failed: {e}"),
-                    )),
-                );
+fn spawn_cleanup_job(pool: &StorePool, email_config: &Arc<nostrbox_core::EmailConfig>) {
+    let pool = pool.clone();
+    let email_config = email_config.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+        loop {
+            interval.tick().await;
+            let pool = pool.clone();
+            let ttl = email_config.abandoned_ttl();
+            if let Err(e) = tokio::task::spawn_blocking(move || {
+                let store = pool.get()?;
+                let tokens = store.cleanup_login_tokens().unwrap_or(0);
+                let emails = store.cleanup_abandoned_email_identities(ttl).unwrap_or(0);
+                let audit = store.cleanup_relay_audit_log(86400 * 30).unwrap_or(0);
+                if tokens > 0 || emails > 0 || audit > 0 {
+                    info!(tokens, emails, audit, "cleanup completed");
+                }
+                Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+            }).await {
+                tracing::warn!("cleanup task failed: {e}");
             }
         }
-    } else if is_local && state.auth_config.local_bypass {
-        req.auth_source = AuthSource::LocalBypass;
-    } else {
-        req.caller = None;
-    }
-
-    let pool = state.pool.clone();
-    let keys = state.keys.clone();
-    let email_config = state.email_config.clone();
-    let resp = tokio::task::spawn_blocking(move || {
-        let store = pool.get().expect("failed to get store connection");
-        let handler = if let Some(ref keys) = keys {
-            OperationHandler::with_keys(&store, keys)
-        } else {
-            OperationHandler::new(&store)
-        };
-        handler.with_email(&email_config).handle(&req)
-    })
-    .await
-    .unwrap();
-    let status = if resp.ok {
-        StatusCode::OK
-    } else if resp.error_code.as_deref() == Some("unauthorized") {
-        StatusCode::UNAUTHORIZED
-    } else {
-        StatusCode::BAD_REQUEST
-    };
-    (status, Json(resp))
+    });
 }

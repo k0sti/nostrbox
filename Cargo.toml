@@ -4,8 +4,11 @@ members = [
     "crates/core",
     "crates/nostr",
     "crates/store",
-    "crates/contextvm",
     "crates/relay",
+    "crates/ext-management",
+    "crates/ext-email-login",
+    "crates/ext-contextvm",
+    "crates/ext-webui",
     "crates/server",
 ]
 
@@ -49,10 +52,14 @@ base64 = "0.22"
 
 # Config
 toml_parse = { package = "toml", version = "0.8" }
+serde_yaml = "0.9"
 
 # Internal crates
 nostrbox-core = { path = "crates/core" }
 nostrbox-nostr = { path = "crates/nostr" }
 nostrbox-store = { path = "crates/store" }
-nostrbox-contextvm = { path = "crates/contextvm" }
 nostrbox-relay = { path = "crates/relay" }
+nostrbox-ext-management = { path = "crates/ext-management" }
+nostrbox-ext-email-login = { path = "crates/ext-email-login" }
+nostrbox-ext-contextvm = { path = "crates/ext-contextvm" }
+nostrbox-ext-webui = { path = "crates/ext-webui" }

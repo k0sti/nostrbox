@@ -1,3 +1,7 @@
+//! Operation request/response types.
+//!
+//! Shared across all extensions and the server.
+
 use serde::{Deserialize, Serialize};
 
 /// How the caller's identity was verified.

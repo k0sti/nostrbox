@@ -1,0 +1,16 @@
+[package]
+name = "nostrbox-ext-contextvm"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+nostrbox-core = { workspace = true }
+nostrbox-store = { workspace = true }
+nostrbox-ext-management = { workspace = true }
+nostrbox-ext-email-login = { workspace = true }
+contextvm-sdk = { workspace = true }
+nostr-sdk = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }

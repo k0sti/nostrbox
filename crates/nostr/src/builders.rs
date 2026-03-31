@@ -1,7 +1,7 @@
 //! Event publishing: build and sign Nostr events for state changes.
 
 use nostr_sdk::prelude::*;
-use nostrbox_nostr::kinds;
+use crate::kinds;
 
 /// Build a role assignment event (kind 30078).
 /// `d` tag: target actor pubkey. Content: role JSON.

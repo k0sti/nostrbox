@@ -1,0 +1,17 @@
+[package]
+name = "nostrbox-ext-email-login"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+nostrbox-core = { workspace = true }
+nostrbox-store = { workspace = true }
+nostrbox-ext-management = { workspace = true }
+nostr-sdk = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+rand = { workspace = true }
+base64 = { workspace = true }
