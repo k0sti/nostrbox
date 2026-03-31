@@ -27,3 +27,11 @@ web/.vite/
 .env.local
 *.db-shm
 *.db-wal
+
+# Config (contains secrets)
+nostrbox.toml
+nostrbox.yaml
+nostrbox.yml
+
+# Claude Code
+.claude/

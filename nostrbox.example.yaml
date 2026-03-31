@@ -1,0 +1,19 @@
+# NostrBox configuration example
+# Copy to nostrbox.yaml and fill in your values.
+
+bind_address: "0.0.0.0:3400"
+db_path: "nostrbox.db"
+web_dist_path: "web/dist"
+# identity_nsec: "nsec1..."
+relay_urls: []
+# public_url: "https://nostrbox.example.com"
+
+auth:
+  auth_window_secs: 60
+  local_bypass: true
+  # owner_pubkey: "npub1..."
+
+email:
+  # resend_api_key: "re_..."
+  # from_address: "Nostrbox <login@nostrbox.example.com>"
+  # public_url: "https://nostrbox.example.com"
