@@ -51,7 +51,6 @@ rand = "0.9"
 base64 = "0.22"
 
 # Config
-toml_parse = { package = "toml", version = "0.8" }
 serde_yaml = "0.9"
 
 # Internal crates

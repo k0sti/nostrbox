@@ -1,4 +1,4 @@
-//! Server configuration, loaded from YAML (with TOML fallback).
+//! Server configuration, loaded from YAML.
 
 use serde::{Deserialize, Serialize};
 use tracing::info;
@@ -113,16 +113,9 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Load configuration. Tries YAML first, falls back to TOML.
+    /// Load configuration from `nostrbox.yaml` (or `NOSTRBOX_CONFIG` override).
     pub fn load() -> Self {
-        let path = std::env::var("NOSTRBOX_CONFIG").unwrap_or_else(|_| {
-            // Try YAML first, then TOML
-            if std::path::Path::new("nostrbox.yaml").exists() {
-                "nostrbox.yaml".into()
-            } else {
-                "nostrbox.toml".into()
-            }
-        });
+        let path = std::env::var("NOSTRBOX_CONFIG").unwrap_or_else(|_| "nostrbox.yaml".into());
         Self::load_from(&path)
     }
 
@@ -130,11 +123,7 @@ impl Config {
     pub fn load_from(path: &str) -> Self {
         match std::fs::read_to_string(path) {
             Ok(contents) => {
-                let result = if path.ends_with(".yaml") || path.ends_with(".yml") {
-                    serde_yaml::from_str(&contents).map_err(|e| e.to_string())
-                } else {
-                    toml_parse::from_str(&contents).map_err(|e| e.to_string())
-                };
+                let result = serde_yaml::from_str(&contents).map_err(|e| e.to_string());
                 match result {
                     Ok(config) => {
                         info!("loaded config from {path}");
