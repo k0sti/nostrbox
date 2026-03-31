@@ -128,6 +128,11 @@ impl Store {
             "ALTER TABLE email_identities ADD COLUMN last_login_at INTEGER;"
         );
 
+        // Safe migration: add received_at to events if missing
+        let _ = self.conn.execute_batch(
+            "ALTER TABLE events ADD COLUMN received_at INTEGER NOT NULL DEFAULT 0;"
+        );
+
         Ok(())
     }
 

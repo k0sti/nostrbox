@@ -4,13 +4,11 @@ use std::sync::Arc;
 use axum::{
     Router,
     extract::{ConnectInfo, State},
-    extract::{FromRequest, ws::{WebSocket, WebSocketUpgrade, Message}},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json},
     routing::{get, post},
 };
 use base64::Engine;
-use futures_util::{SinkExt, StreamExt};
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tracing::info;
@@ -19,8 +17,7 @@ use tracing_subscriber::EnvFilter;
 use nostr_sdk::ToBech32;
 use nostrbox_contextvm::{AuthSource, EmailConfig, ErrorCode, OperationRequest, OperationResponse};
 use nostrbox_contextvm::OperationHandler;
-use nostrbox_relay::config::RelayAccessConfig;
-use nostrbox_relay::setup::{RelayConfig, start_relay};
+use nostrbox_relay::config::{RelayAccessConfig, RelayConfig};
 use nostrbox_store::StorePool;
 
 /// HTTP auth (NIP-98) configuration.
@@ -53,7 +50,6 @@ pub struct Config {
     pub db_path: String,
     pub web_dist_path: String,
     pub identity_nsec: Option<String>,
-    pub relay_port: u16,
     pub relay_urls: Vec<String>,
     /// Public base URL (e.g. "https://nostrbox.atlantislabs.space").
     /// Used to derive the public relay WebSocket URL (wss://.../ws).
@@ -76,7 +72,6 @@ impl Default for Config {
             db_path: "nostrbox.db".into(),
             web_dist_path: "web/dist".into(),
             identity_nsec: None,
-            relay_port: 7777,
             relay_urls: vec![],
             public_url: None,
             email: EmailConfig::default(),
@@ -107,17 +102,17 @@ impl Config {
         }
     }
 
-    /// Derive the public relay URL from public_url config or fall back to local relay URL.
-    fn public_relay_url(&self, local_relay_url: &str) -> String {
+    /// Derive the public relay URL from public_url config.
+    fn public_relay_url(&self) -> String {
         if let Some(ref base) = self.public_url {
             let scheme = if base.starts_with("https://") { "wss" } else { "ws" };
             let host = base
                 .trim_start_matches("https://")
                 .trim_start_matches("http://")
                 .trim_end_matches('/');
-            format!("{scheme}://{host}/ws")
+            format!("{scheme}://{host}/relay")
         } else {
-            local_relay_url.to_string()
+            format!("ws://{}/relay", self.bind_address)
         }
     }
 }
@@ -128,8 +123,6 @@ struct AppState {
     keys: Option<Arc<nostr_sdk::Keys>>,
     /// Public-facing relay URL (for NIP-11 / client use).
     public_relay_url: String,
-    /// Internal relay URL (ws://127.0.0.1:PORT) for proxying.
-    local_relay_url: String,
     /// Email login configuration.
     email_config: Arc<EmailConfig>,
     /// Public base URL for NIP-98 URL verification.
@@ -237,16 +230,23 @@ async fn main() {
         }
     }
 
-    // Start relay
+    // Build relay config
+    let server_pubkey = keys
+        .as_ref()
+        .map(|k| k.public_key().to_hex())
+        .unwrap_or_default();
+    let public_relay_url = config.public_relay_url();
     let relay_config = RelayConfig {
-        port: config.relay_port,
+        name: "nostrbox".into(),
+        description: "Nostrbox community relay".into(),
+        server_pubkey: server_pubkey.clone(),
+        public_relay_url: public_relay_url.clone(),
+        access: config.relay.clone(),
     };
-    let relay = start_relay(relay_config, pool.clone(), config.relay.clone())
-        .await
-        .expect("failed to start relay");
-    let local_relay_url = relay.url().await.to_string();
-    let public_relay_url = config.public_relay_url(&local_relay_url);
-    info!(local = %local_relay_url, public = %public_relay_url, "relay running");
+
+    // Build relay routes (WebSocket on /ws with embedded NIP-11)
+    let relay_router = nostrbox_relay::relay_routes(pool.clone(), relay_config);
+    info!(url = %public_relay_url, "relay ready");
 
     // Build email config (env var overrides config file for API key)
     let mut email_config = config.email.clone();
@@ -268,9 +268,15 @@ async fn main() {
 
     // Start ContextVM transport (if identity is configured)
     if let Some(ref keys) = keys {
+        // ContextVM transport needs a relay URL to connect to.
+        // Use relay_urls from config, or fall back to the local bind address.
+        let transport_relay_url = if !config.relay_urls.is_empty() {
+            config.relay_urls[0].clone()
+        } else {
+            format!("ws://{}/relay", config.bind_address)
+        };
         let transport_pool = pool.clone();
         let transport_keys = keys.clone();
-        let transport_relay_url = local_relay_url.clone();
         let transport_email_config = email_config.clone();
         tokio::spawn(async move {
             if let Err(e) =
@@ -285,9 +291,14 @@ async fn main() {
     // Start event ingestion pipeline
     {
         let ingestion_pool = pool.clone();
-        let ingestion_relay_url = local_relay_url.clone();
+        let ingestion_keys = keys.clone();
+        let ingestion_relay_url = if !config.relay_urls.is_empty() {
+            config.relay_urls[0].clone()
+        } else {
+            format!("ws://{}/relay", config.bind_address)
+        };
         tokio::spawn(async move {
-            if let Err(e) = start_event_ingestion(&ingestion_relay_url, ingestion_pool).await {
+            if let Err(e) = start_event_ingestion(ingestion_keys.as_ref().map(|v| &**v), &ingestion_relay_url, ingestion_pool).await {
                 tracing::error!("event ingestion failed: {e}");
             }
         });
@@ -325,7 +336,6 @@ async fn main() {
         pool,
         keys,
         public_relay_url,
-        local_relay_url,
         email_config,
         public_url: config.public_url.clone(),
         auth_config: config.auth.clone(),
@@ -335,159 +345,29 @@ async fn main() {
     let spa_fallback = ServeFile::new(format!("{}/index.html", config.web_dist_path));
     let serve_dir = ServeDir::new(&config.web_dist_path).fallback(spa_fallback);
 
-    // Build router
+    // Build router — merge relay routes (handles /ws) into the app router.
+    // relay_router has its own state (RelayState) already applied, so merge
+    // after with_state resolves AppState → Router<()>.
     let app = Router::new()
         .route("/health", get(health))
         .route("/api/op", post(handle_operation))
         .route("/api/relay-info", get(relay_info))
-        .route("/ws", get(ws_handler))
         .fallback_service(serve_dir)
-        .layer(CorsLayer::permissive())
-        .with_state(state);
+        .with_state(state)
+        .merge(relay_router)
+        .layer(CorsLayer::permissive());
 
     info!("nostrbox server starting on {}", config.bind_address);
     let listener = tokio::net::TcpListener::bind(&config.bind_address)
         .await
         .unwrap();
 
-    // Keep relay alive for the lifetime of the server
-    let _relay = relay;
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
     .await
     .unwrap();
-}
-
-/// WebSocket proxy + NIP-11 handler for /ws.
-///
-/// If the request is a WebSocket upgrade, proxy to the local relay.
-/// Otherwise, serve NIP-11 relay information document (SDK clients
-/// fetch this via plain HTTP GET on the relay URL).
-async fn ws_handler(
-    headers: HeaderMap,
-    State(state): State<AppState>,
-    request: axum::extract::Request,
-) -> axum::response::Response {
-    // Check if this is a WebSocket upgrade request
-    let is_upgrade = headers
-        .get("upgrade")
-        .and_then(|v| v.to_str().ok())
-        .map(|v| v.eq_ignore_ascii_case("websocket"))
-        .unwrap_or(false);
-
-    if is_upgrade {
-        // Re-extract WebSocketUpgrade from the request
-        let ws = match WebSocketUpgrade::from_request(request, &()).await {
-            Ok(ws) => ws,
-            Err(e) => return e.into_response(),
-        };
-        ws.on_upgrade(move |client_ws| relay_proxy(client_ws, state.local_relay_url))
-            .into_response()
-    } else {
-        // Serve NIP-11 relay info
-        ws_info(headers, State(state)).await.into_response()
-    }
-}
-
-/// NIP-11 relay info for plain GET /ws (no upgrade header).
-async fn ws_info(
-    headers: HeaderMap,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
-    let server_pubkey = state
-        .keys
-        .as_ref()
-        .map(|k| k.public_key().to_hex())
-        .unwrap_or_default();
-
-    let accept = headers
-        .get("accept")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-
-    if accept.contains("application/nostr+json") {
-        let info = serde_json::json!({
-            "name": "nostrbox",
-            "description": "Nostrbox community relay",
-            "supported_nips": [1, 9, 11, 42, 59, 98],
-            "software": "nostrbox",
-            "version": env!("CARGO_PKG_VERSION"),
-            "relay_url": state.public_relay_url,
-            "pubkey": server_pubkey,
-        });
-        (
-            StatusCode::OK,
-            [(axum::http::header::CONTENT_TYPE, "application/nostr+json")],
-            serde_json::to_string(&info).unwrap(),
-        )
-            .into_response()
-    } else {
-        (
-            StatusCode::OK,
-            [(axum::http::header::CONTENT_TYPE, "application/json")],
-            serde_json::json!({
-                "relay_url": state.public_relay_url,
-                "pubkey": server_pubkey,
-                "status": "running",
-            })
-            .to_string(),
-        )
-            .into_response()
-    }
-}
-
-async fn relay_proxy(client_ws: WebSocket, relay_url: String) {
-    // Connect to the local relay
-    let upstream = match tokio_tungstenite::connect_async(&relay_url).await {
-        Ok((ws, _)) => ws,
-        Err(e) => {
-            tracing::warn!("failed to connect to local relay: {e}");
-            return;
-        }
-    };
-
-    let (mut client_tx, mut client_rx) = client_ws.split();
-    let (mut relay_tx, mut relay_rx) = upstream.split();
-
-    // Client → Relay
-    let client_to_relay = async {
-        while let Some(Ok(msg)) = client_rx.next().await {
-            let tung_msg = match msg {
-                Message::Text(t) => tokio_tungstenite::tungstenite::Message::Text(t.to_string().into()),
-                Message::Binary(b) => tokio_tungstenite::tungstenite::Message::Binary(b),
-                Message::Ping(p) => tokio_tungstenite::tungstenite::Message::Ping(p),
-                Message::Pong(p) => tokio_tungstenite::tungstenite::Message::Pong(p),
-                Message::Close(_) => break,
-            };
-            if relay_tx.send(tung_msg).await.is_err() {
-                break;
-            }
-        }
-    };
-
-    // Relay → Client
-    let relay_to_client = async {
-        while let Some(Ok(msg)) = relay_rx.next().await {
-            let axum_msg = match msg {
-                tokio_tungstenite::tungstenite::Message::Text(t) => Message::Text(t.to_string().into()),
-                tokio_tungstenite::tungstenite::Message::Binary(b) => Message::Binary(b),
-                tokio_tungstenite::tungstenite::Message::Ping(p) => Message::Ping(p),
-                tokio_tungstenite::tungstenite::Message::Pong(p) => Message::Pong(p),
-                tokio_tungstenite::tungstenite::Message::Close(_) => break,
-                _ => continue,
-            };
-            if client_tx.send(axum_msg).await.is_err() {
-                break;
-            }
-        }
-    };
-
-    tokio::select! {
-        _ = client_to_relay => {},
-        _ = relay_to_client => {},
-    }
 }
 
 /// Start the ContextVM transport: listen for incoming JSON-RPC requests over Nostr
@@ -522,7 +402,6 @@ async fn start_contextvm_transport(
 
     while let Some(incoming) = rx.recv().await {
         let event_id = incoming.event_id.clone();
-        let client_pubkey = incoming.client_pubkey.clone();
 
         // Extract method and params from the JSON-RPC request
         let (id, method, params) = match &incoming.message {
@@ -531,6 +410,8 @@ async fn start_contextvm_transport(
             }
             _ => continue, // skip non-requests
         };
+
+        let client_pubkey = incoming.client_pubkey.clone();
 
         // Map JSON-RPC method to ContextVM operation
         let op_req = OperationRequest {
@@ -571,13 +452,18 @@ async fn start_contextvm_transport(
 
 /// Subscribe to the relay for app-relevant kinds and ingest events into the store.
 async fn start_event_ingestion(
+    keys: Option<&nostr_sdk::Keys>,
     relay_url: &str,
     pool: StorePool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    use nostr_sdk::{Client, Filter, RelayPoolNotification};
+    use nostr_sdk::{Client, ClientBuilder, Filter, RelayPoolNotification};
     use nostrbox_nostr::kinds;
 
-    let client = Client::default();
+    let client = if let Some(keys) = keys {
+        ClientBuilder::new().signer(keys.clone()).build()
+    } else {
+        Client::default()
+    };
     client.add_relay(relay_url).await?;
     client.connect().await;
 
@@ -706,28 +592,22 @@ async fn relay_info(
 // ── NIP-98 HTTP Auth ─────────────────────────────────────
 
 /// Verify a NIP-98 `Authorization: Nostr <base64>` header.
-///
-/// Checks event kind (27235), signature, timestamp, URL and method tags.
-/// Returns the verified pubkey on success.
 fn verify_nip98(
     auth_header: &str,
     request_url: &str,
     request_method: &str,
     max_age_secs: u64,
 ) -> Result<String, String> {
-    // 1. Strip "Nostr " prefix
     let b64 = auth_header
         .strip_prefix("Nostr ")
         .ok_or("missing Nostr prefix")?;
 
-    // 2. Decode base64 → JSON
     let json_bytes = base64::engine::general_purpose::STANDARD
         .decode(b64)
         .map_err(|e| format!("base64 decode: {e}"))?;
     let json_str = String::from_utf8(json_bytes)
         .map_err(|e| format!("utf8: {e}"))?;
 
-    // 3. Parse as Nostr event and verify signature
     let event: nostr_sdk::Event = serde_json::from_str(&json_str)
         .map_err(|e| format!("event parse: {e}"))?;
     if !event.verify_id() {
@@ -737,19 +617,16 @@ fn verify_nip98(
         return Err("signature verification failed".into());
     }
 
-    // 4. Verify kind == 27235
     if event.kind.as_u16() != 27235 {
         return Err(format!("wrong kind: {}", event.kind.as_u16()));
     }
 
-    // 5. Verify timestamp
     let now = nostr_sdk::Timestamp::now().as_u64();
     let event_time = event.created_at.as_u64();
     if now.abs_diff(event_time) > max_age_secs {
         return Err("auth event expired".into());
     }
 
-    // 6. Extract tags from the raw JSON (avoids nostr-sdk Tag API complexity)
     let json_val: serde_json::Value =
         serde_json::from_str(&json_str).map_err(|e| format!("json: {e}"))?;
     let tags = json_val
@@ -757,7 +634,6 @@ fn verify_nip98(
         .and_then(|t| t.as_array())
         .ok_or("missing tags")?;
 
-    // 7. Verify URL tag
     let url_tag = tags
         .iter()
         .find_map(|t| {
@@ -775,7 +651,6 @@ fn verify_nip98(
         ));
     }
 
-    // 8. Verify method tag
     let method_tag = tags
         .iter()
         .find_map(|t| {
@@ -793,11 +668,9 @@ fn verify_nip98(
         ));
     }
 
-    // 9. Return verified pubkey
     Ok(event.pubkey.to_hex())
 }
 
-/// Reconstruct the expected request URL for NIP-98 verification.
 fn build_request_url(state: &AppState, headers: &HeaderMap) -> String {
     if let Some(ref base) = state.public_url {
         format!("{}/api/op", base.trim_end_matches('/'))
@@ -811,11 +684,6 @@ fn build_request_url(state: &AppState, headers: &HeaderMap) -> String {
 }
 
 /// ContextVM operation endpoint with NIP-98 authentication.
-///
-/// Caller identity is resolved in priority order:
-/// 1. NIP-98 Authorization header → cryptographically verified pubkey
-/// 2. Local bypass (loopback IP, no auth header) → trust body `caller` field
-/// 3. Remote without auth → anonymous (caller = None)
 async fn handle_operation(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -825,7 +693,6 @@ async fn handle_operation(
     let mut req = req;
     let is_local = addr.ip().is_loopback();
 
-    // Resolve caller identity from NIP-98 or local bypass
     if let Some(auth) = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
@@ -849,10 +716,8 @@ async fn handle_operation(
             }
         }
     } else if is_local && state.auth_config.local_bypass {
-        // Local bypass: keep body caller for backward compat
         req.auth_source = AuthSource::LocalBypass;
     } else {
-        // Remote without auth (or local with bypass disabled): anonymous
         req.caller = None;
     }
 

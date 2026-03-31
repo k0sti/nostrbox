@@ -31,14 +31,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Web / HTTP
 axum = { version = "0.8", features = ["ws"] }
-tokio-tungstenite = "0.26"
 futures-util = "0.3"
 tower-http = { version = "0.6", features = ["cors", "fs"] }
 
 # Nostr
 nostr-sdk = { version = "0.43", features = ["nip59"] }
-nostr-relay-builder = { path = "../nostr-1/crates/nostr-relay-builder" }
-nostr-database = "0.43"
 
 # ContextVM
 contextvm-sdk = { path = "../rust-contextvm-sdk" }

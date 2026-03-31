@@ -25,3 +25,5 @@ web/.vite/
 # Environment
 .env
 .env.local
+*.db-shm
+*.db-wal

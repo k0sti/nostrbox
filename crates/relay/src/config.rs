@@ -79,7 +79,7 @@ pub struct RelayAccessConfig {
 impl Default for RelayAccessConfig {
     fn default() -> Self {
         Self {
-            write_bypass_kinds: vec![1059, 1060],
+            write_bypass_kinds: vec![1059, 1060], // NIP-59 gift wraps
             guest: RoleAccess {
                 read_kinds: vec![KindSpec::Single(0), KindSpec::Single(9021)],
                 read_all: false,
@@ -116,6 +116,33 @@ impl RelayAccessConfig {
             nostrbox_core::GlobalRole::Member => &self.member,
             nostrbox_core::GlobalRole::Admin => &self.admin,
             nostrbox_core::GlobalRole::Owner => &self.owner,
+        }
+    }
+}
+
+/// Top-level relay configuration.
+#[derive(Debug, Clone)]
+pub struct RelayConfig {
+    /// Relay name for NIP-11.
+    pub name: String,
+    /// Relay description for NIP-11.
+    pub description: String,
+    /// Server public key (hex) for NIP-11.
+    pub server_pubkey: String,
+    /// Public relay URL (for NIP-11 relay_url field).
+    pub public_relay_url: String,
+    /// Access control config.
+    pub access: RelayAccessConfig,
+}
+
+impl Default for RelayConfig {
+    fn default() -> Self {
+        Self {
+            name: "nostrbox".into(),
+            description: "Nostrbox community relay".into(),
+            server_pubkey: String::new(),
+            public_relay_url: String::new(),
+            access: RelayAccessConfig::default(),
         }
     }
 }
