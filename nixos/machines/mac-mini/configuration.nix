@@ -38,8 +38,7 @@
     isNormalUser = true;
     extraGroups = [ "wheel" "networkmanager" ];
     openssh.authorizedKeys.keys = [
-      # TODO: add your SSH pubkey here
-      # "ssh-ed25519 AAAA..."
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHpHNhhKTNylsjkd8pTNqRqe70fSnKCZINTmZ4AMnDXq k0@studio"
     ];
   };
 
