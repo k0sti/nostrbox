@@ -73,6 +73,35 @@ impl Default for AuthConfig {
     }
 }
 
+/// FIPS mesh networking configuration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FipsConfig {
+    /// Enable FIPS mesh networking.
+    pub enable: bool,
+    /// Listen address for UDP/TCP transports.
+    #[serde(default = "FipsConfig::default_listen")]
+    pub listen: String,
+    /// Enabled transports (e.g. ["udp", "tcp", "ble"]).
+    #[serde(default = "FipsConfig::default_transports")]
+    pub transports: Vec<String>,
+    /// Static peers (e.g. ["npub1...@192.168.1.1:2121/udp"]).
+    #[serde(default)]
+    pub peers: Vec<String>,
+    /// Control socket path.
+    #[serde(default = "FipsConfig::default_socket_path")]
+    pub socket_path: String,
+    /// Enable DNS responder for .fips names.
+    #[serde(default)]
+    pub dns_enable: bool,
+}
+
+impl FipsConfig {
+    fn default_listen() -> String { "0.0.0.0:2121".into() }
+    fn default_transports() -> Vec<String> { vec!["udp".into(), "tcp".into()] }
+    fn default_socket_path() -> String { "/run/fips/control.sock".into() }
+}
+
 /// Server configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -94,6 +123,9 @@ pub struct Config {
     /// HTTP auth (NIP-98) configuration.
     #[serde(default)]
     pub auth: AuthConfig,
+    /// FIPS mesh networking configuration.
+    #[serde(default)]
+    pub fips: FipsConfig,
 }
 
 impl Default for Config {
@@ -108,6 +140,7 @@ impl Default for Config {
             email: EmailConfig::default(),
             relay: serde_json::Value::default(),
             auth: AuthConfig::default(),
+            fips: FipsConfig::default(),
         }
     }
 }

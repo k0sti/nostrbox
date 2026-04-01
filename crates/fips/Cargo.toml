@@ -1,0 +1,17 @@
+[package]
+name = "nostrbox-fips"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+nostr-sdk = { workspace = true }
+nostrbox-core = { workspace = true }
+thiserror = "2.0"
+
+[dev-dependencies]
+tempfile = "3"

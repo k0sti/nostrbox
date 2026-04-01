@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/core",
+    "crates/fips",
     "crates/nostr",
     "crates/store",
     "crates/relay",
@@ -55,6 +56,7 @@ serde_yaml = "0.9"
 
 # Internal crates
 nostrbox-core = { path = "crates/core" }
+nostrbox-fips = { path = "crates/fips" }
 nostrbox-nostr = { path = "crates/nostr" }
 nostrbox-store = { path = "crates/store" }
 nostrbox-relay = { path = "crates/relay" }

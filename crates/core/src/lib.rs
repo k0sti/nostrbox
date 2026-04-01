@@ -11,7 +11,7 @@ pub mod visibility;
 /// Re-export core types for convenience.
 pub use access::can_access;
 pub use actor::{Actor, ActorKind, ActorStatus};
-pub use config::{AuthConfig, Config, EmailConfig};
+pub use config::{AuthConfig, Config, EmailConfig, FipsConfig};
 pub use group::{Group, GroupMember, GroupRole, GroupStatus, JoinPolicy};
 pub use identity::BoxIdentity;
 pub use ops::{AuthSource, ErrorCode, OperationRequest, OperationResponse};
