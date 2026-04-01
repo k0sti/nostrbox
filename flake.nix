@@ -10,11 +10,16 @@
     flake-utils.url = "github:numtide/flake-utils";
 
     # FIPS mesh networking
-    # TODO: uncomment when fips flake is available
-    # fips.url = "github:jmcorgan/fips";
+    # Local dev: nix flake update fips --override-input fips path:../fips
+    # Prod: pinned to git commit
+    fips = {
+      url = "github:k0sti/fips";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.rust-overlay.follows = "rust-overlay";
+    };
   };
 
-  outputs = { self, nixpkgs, rust-overlay, flake-utils, ... }:
+  outputs = { self, nixpkgs, rust-overlay, flake-utils, fips, ... }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         overlays = [ (import rust-overlay) ];
@@ -39,6 +44,10 @@
           darwin.apple_sdk.frameworks.SystemConfiguration
         ];
 
+        # FIPS packages (BLE variant on Linux, base on macOS)
+        fipsPkgs = fips.packages.${system};
+        fipsPackage = if pkgs.stdenv.isLinux then fipsPkgs.fips-ble else fipsPkgs.fips;
+
         # Web UI deps
         webInputs = with pkgs; [
           bun
@@ -47,12 +56,13 @@
 
       in {
         devShells.default = pkgs.mkShell {
-          nativeBuildInputs = nativeBuildInputs ++ webInputs;
+          nativeBuildInputs = nativeBuildInputs ++ webInputs ++ [ fipsPackage ];
           inherit buildInputs;
 
           shellHook = ''
             echo "🔲 NostrBox dev shell"
             echo "   rust: $(rustc --version)"
+            echo "   fips: ${fipsPackage.name} (${if pkgs.stdenv.isLinux then "BLE enabled" else "no BLE — macOS"})"
             echo "   cargo build / just run / just dev"
           '';
 
@@ -63,6 +73,9 @@
           # For rusqlite bundled feature (uses cc)
           # If switching to system sqlite, set SQLITE3_LIB_DIR instead
         };
+
+        packages.fips = fipsPackage;
+        packages.fips-base = fipsPkgs.fips;
 
         packages.default = pkgs.rustPlatform.buildRustPackage {
           pname = "nostrbox";
@@ -80,6 +93,8 @@
       }
     ) // {
       # NixOS module for appliance deployment
+      nixosModules.fips = import ./nixos/modules/fips.nix;
+
       nixosModules.nostrbox = { config, lib, pkgs, ... }:
         let
           cfg = config.services.nostrbox;
@@ -130,6 +145,11 @@
             fips = {
               enable = lib.mkEnableOption "FIPS mesh networking";
 
+              package = lib.mkOption {
+                type = lib.types.package;
+                description = "FIPS package (use fips-ble for BLE support)";
+              };
+
               listenAddress = lib.mkOption {
                 type = lib.types.str;
                 default = "0.0.0.0:9735";
@@ -146,6 +166,12 @@
                 type = lib.types.listOf lib.types.str;
                 default = [];
                 description = "Static FIPS peers (npub@host:port)";
+              };
+
+              socketPath = lib.mkOption {
+                type = lib.types.str;
+                default = "/run/fips/fips.sock";
+                description = "FIPS control socket path";
               };
             };
           };
@@ -209,10 +235,23 @@
       # Build: nixos-rebuild switch --flake .#mac-mini
       nixosConfigurations.mac-mini = nixpkgs.lib.nixosSystem {
         system = "x86_64-linux";
-        specialArgs = { inputs = { inherit self; }; };
+        specialArgs = { inputs = { inherit self; inherit fips; }; };
         modules = [
           self.nixosModules.nostrbox
+          self.nixosModules.fips
           ./nixos/machines/mac-mini/configuration.nix
+          ./nixos/profiles/appliance.nix
+        ];
+      };
+
+      nixosConfigurations.mac-mini-dev = nixpkgs.lib.nixosSystem {
+        system = "x86_64-linux";
+        specialArgs = { inputs = { inherit self; inherit fips; }; };
+        modules = [
+          self.nixosModules.nostrbox
+          self.nixosModules.fips
+          ./nixos/machines/mac-mini/configuration.nix
+          ./nixos/profiles/dev.nix
         ];
       };
     };
