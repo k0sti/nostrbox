@@ -6,7 +6,7 @@ let
 
     relay {
         bind = "0.0.0.0"
-        port = 3330
+        port = 4869
         nofiles = 524288
 
         info {
@@ -23,7 +23,7 @@ let
         dir: ./data/blobs
 
     server:
-      port: 3000
+      port: 24242
       host: 0.0.0.0
 
     rules:
@@ -169,8 +169,8 @@ in
 
   # ---------- Firewall ----------
   networking.firewall.allowedTCPPorts = [
-    3330  # strfry relay (ws)
-    3000  # blossom media server
+    4869   # strfry relay (ws)
+    24242  # blossom media server
   ];
 
   # ---------- Nix ----------
