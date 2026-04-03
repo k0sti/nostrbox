@@ -32,6 +32,22 @@
     };
   };
 
+  # ---------- FIPS mesh networking ----------
+  services.fips = {
+    enable = true;
+    package = inputs.fips.packages.x86_64-linux.fips-ble;
+    transports = [ "udp" ];
+    peers = [
+      {
+        npub = "npub1vu597zwwq0j9jksuptc9u4wmhavykuk44djlq7xu90pesueu3rdsnm32ah";
+        alias = "zephyrus";
+        addresses = [
+          { transport = "udp"; addr = "10.10.243.238:2121"; }
+        ];
+      }
+    ];
+  };
+
   # ---------- NostrBox service ----------
   # Uncomment once the package builds
   # services.nostrbox = {
@@ -40,10 +56,6 @@
   #   webDistPath = "/var/lib/nostrbox/web";
   #   bindAddress = "0.0.0.0:3400";
   #   openFirewall = true;
-  #   fips = {
-  #     enable = true;
-  #     transports = [ "udp" "tcp" ];
-  #   };
   # };
 
   # ---------- Nix ----------
@@ -57,6 +69,7 @@
     just
     tmux
     curl
+    inputs.fips.packages.x86_64-linux.fips-ble  # fipsctl, fipstop
   ];
 
   # ---------- Power ----------
