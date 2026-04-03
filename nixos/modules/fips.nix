@@ -26,6 +26,13 @@ let
       tcp = if builtins.elem "tcp" cfg.transports then {
         bind_addr = cfg.listenAddress;
       } else null;
+      ethernet = if cfg.ethernet.enable then {
+        interface = cfg.ethernet.interface;
+        discovery = cfg.ethernet.discovery;
+        announce = cfg.ethernet.announce;
+        auto_connect = cfg.ethernet.autoConnect;
+        accept_connections = cfg.ethernet.acceptConnections;
+      } else null;
       ble = if builtins.elem "ble" cfg.transports then {
         instances = [{ enabled = true; }];
       } else null;
@@ -56,13 +63,46 @@ in {
     listenAddress = lib.mkOption {
       type = lib.types.str;
       default = "0.0.0.0:2121";
-      description = "FIPS transport listen address";
+      description = "FIPS transport listen address (for udp/tcp)";
     };
 
     transports = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ "udp" ];
-      description = "Enabled FIPS transports (udp, tcp, ble)";
+      description = "Enabled FIPS transports (udp, tcp, ble). Ethernet is configured separately.";
+    };
+
+    ethernet = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = "Enable raw Ethernet transport";
+      };
+      interface = lib.mkOption {
+        type = lib.types.str;
+        default = "eth0";
+        description = "Ethernet interface for raw frame transport";
+      };
+      discovery = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = "Listen for discovery beacons";
+      };
+      announce = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = "Broadcast announcement beacons on LAN";
+      };
+      autoConnect = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = "Auto-connect to discovered peers";
+      };
+      acceptConnections = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = "Accept incoming connection attempts";
+      };
     };
 
     peers = lib.mkOption {

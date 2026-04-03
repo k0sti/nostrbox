@@ -37,6 +37,10 @@
     enable = true;
     package = inputs.fips.packages.x86_64-linux.fips-ble;
     transports = [ "udp" ];
+    ethernet = {
+      enable = true;
+      interface = "enp3s0f0";
+    };
     peers = [
       {
         npub = "npub1vu597zwwq0j9jksuptc9u4wmhavykuk44djlq7xu90pesueu3rdsnm32ah";
@@ -71,13 +75,6 @@
     curl
     inputs.fips.packages.x86_64-linux.fips-ble  # fipsctl, fipstop
   ];
-
-  # ---------- Power ----------
-  # Keep system always on (server use)
-  systemd.targets.sleep.enable = false;
-  systemd.targets.suspend.enable = false;
-  systemd.targets.hibernate.enable = false;
-  systemd.targets.hybrid-sleep.enable = false;
 
   # ---------- Misc ----------
   time.timeZone = "Atlantic/Madeira";
