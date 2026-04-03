@@ -90,6 +90,10 @@ status:
 logs:
     sudo journalctl -u nostrbox -f
 
+# Rebuild NixOS configuration (dev profile)
+nixos-rebuild:
+    sudo nixos-rebuild switch --flake ./nixos#mac-mini-dev
+
 # Clean build artifacts
 clean:
     cargo clean

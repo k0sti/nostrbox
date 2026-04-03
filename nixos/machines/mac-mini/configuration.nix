@@ -11,18 +11,17 @@
 
   # Broadcom BCM4331 WiFi (non-free driver)
   boot.kernelModules = [ "wl" ];
+  boot.extraModulePackages = [ config.boot.kernelPackages.broadcom_sta ];
+  boot.blacklistedKernelModules = [ "b43" "bcma" ];
   hardware.enableAllFirmware = true;
   nixpkgs.config.allowUnfree = true;
+  nixpkgs.config.permittedInsecurePackages = [
+    "broadcom-sta-6.30.223.271-59-6.18.20"
+  ];
 
   # ---------- Networking ----------
   networking.hostName = "nostrbox";
   networking.networkmanager.enable = true;
-
-  # ---------- Swap (4GB RAM is tight for Rust builds) ----------
-  swapDevices = [{
-    device = "/var/lib/swapfile";
-    size = 8192; # MB
-  }];
 
   # ---------- SSH ----------
   services.openssh = {
@@ -31,15 +30,6 @@
       PasswordAuthentication = false;
       PermitRootLogin = "no";
     };
-  };
-
-  # ---------- User ----------
-  users.users.k0 = {
-    isNormalUser = true;
-    extraGroups = [ "wheel" "networkmanager" ];
-    openssh.authorizedKeys.keys = [
-      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHpHNhhKTNylsjkd8pTNqRqe70fSnKCZINTmZ4AMnDXq k0@studio"
-    ];
   };
 
   # ---------- NostrBox service ----------
@@ -70,6 +60,6 @@
   ];
 
   # ---------- Misc ----------
-  time.timeZone = "Europe/Helsinki";
-  system.stateVersion = "25.05";
+  time.timeZone = "Atlantic/Madeira";
+  system.stateVersion = "25.11";
 }
