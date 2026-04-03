@@ -1,5 +1,36 @@
 { config, lib, pkgs, inputs, ... }:
 
+let
+  strfryConfig = pkgs.writeText "strfry.conf" ''
+    db = "/var/lib/strfry/strfry-db/"
+
+    relay {
+        bind = "0.0.0.0"
+        port = 3330
+        nofiles = 524288
+
+        info {
+            name = "NostrBox Relay"
+            description = "NostrBox appliance relay"
+        }
+    }
+  '';
+
+  blossomConfig = pkgs.writeText "config.yml" ''
+    storage:
+      backend: local
+      local:
+        dir: ./data/blobs
+
+    server:
+      port: 3000
+      host: 0.0.0.0
+
+    rules:
+      - type: all
+        expiration: false
+  '';
+in
 {
   imports = [
     ./hardware-configuration.nix
@@ -52,6 +83,80 @@
     ];
   };
 
+  # ---------- Strfry Nostr relay ----------
+  systemd.services.strfry = {
+    description = "Strfry Nostr Relay";
+    after = [ "network-online.target" ];
+    wants = [ "network-online.target" ];
+    wantedBy = [ "multi-user.target" ];
+
+    serviceConfig = {
+      Type = "simple";
+      User = "strfry";
+      Group = "strfry";
+      ExecStartPre = "${pkgs.coreutils}/bin/mkdir -p /var/lib/strfry/strfry-db";
+      ExecStart = "${pkgs.strfry}/bin/strfry --config=${strfryConfig} relay";
+      WorkingDirectory = "/var/lib/strfry";
+      Restart = "on-failure";
+      RestartSec = 10;
+      StateDirectory = "strfry";
+
+      NoNewPrivileges = true;
+      ProtectSystem = "strict";
+      ProtectHome = true;
+      ReadWritePaths = [ "/var/lib/strfry" ];
+    };
+  };
+
+  users.users.strfry = {
+    isSystemUser = true;
+    group = "strfry";
+    home = "/var/lib/strfry";
+  };
+  users.groups.strfry = {};
+
+  # ---------- Blossom media server ----------
+  systemd.services.blossom = {
+    description = "Blossom Media Server";
+    after = [ "network-online.target" ];
+    wants = [ "network-online.target" ];
+    wantedBy = [ "multi-user.target" ];
+
+    serviceConfig = {
+      Type = "simple";
+      User = "blossom";
+      Group = "blossom";
+      ExecStart = "${pkgs.nodejs_22}/bin/npx blossom-server-ts";
+      WorkingDirectory = "/var/lib/blossom";
+      Restart = "on-failure";
+      RestartSec = 10;
+      StateDirectory = "blossom";
+
+      NoNewPrivileges = true;
+      ProtectSystem = "strict";
+      ProtectHome = true;
+      ReadWritePaths = [ "/var/lib/blossom" ];
+    };
+
+    environment = {
+      HOME = "/var/lib/blossom";
+      npm_config_cache = "/var/lib/blossom/.npm";
+    };
+  };
+
+  users.users.blossom = {
+    isSystemUser = true;
+    group = "blossom";
+    home = "/var/lib/blossom";
+  };
+  users.groups.blossom = {};
+
+  systemd.tmpfiles.rules = [
+    "d /var/lib/blossom 0755 blossom blossom -"
+    "d /var/lib/blossom/data 0755 blossom blossom -"
+    "L /var/lib/blossom/config.yml - - - - ${blossomConfig}"
+  ];
+
   # ---------- NostrBox service ----------
   # Uncomment once the package builds
   # services.nostrbox = {
@@ -61,6 +166,12 @@
   #   bindAddress = "0.0.0.0:3400";
   #   openFirewall = true;
   # };
+
+  # ---------- Firewall ----------
+  networking.firewall.allowedTCPPorts = [
+    3330  # strfry relay (ws)
+    3000  # blossom media server
+  ];
 
   # ---------- Nix ----------
   nix.settings.experimental-features = [ "nix-command" "flakes" ];
@@ -73,6 +184,9 @@
     just
     tmux
     curl
+    nak
+    strfry
+    nodejs_22  # for blossom npx
     inputs.fips.packages.x86_64-linux.fips-ble  # fipsctl, fipstop
   ];
 
