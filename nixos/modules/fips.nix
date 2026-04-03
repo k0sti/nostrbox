@@ -181,9 +181,9 @@ in {
         Type = "simple";
         ExecStart = "${cfg.package}/bin/fips -c ${fipsConfigFile}";
 
-        # FIPS needs CAP_NET_ADMIN for TUN interface creation
-        AmbientCapabilities = [ "CAP_NET_ADMIN" ];
-        CapabilityBoundingSet = [ "CAP_NET_ADMIN" ];
+        # CAP_NET_ADMIN for TUN interface, CAP_NET_RAW for raw Ethernet transport
+        AmbientCapabilities = [ "CAP_NET_ADMIN" "CAP_NET_RAW" ];
+        CapabilityBoundingSet = [ "CAP_NET_ADMIN" "CAP_NET_RAW" ];
 
         DynamicUser = false;
 
