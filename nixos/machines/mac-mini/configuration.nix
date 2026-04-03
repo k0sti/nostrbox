@@ -5,7 +5,7 @@ let
     db = "/var/lib/strfry/strfry-db/"
 
     relay {
-        bind = "0.0.0.0"
+        bind = "::"
         port = 4869
         nofiles = 524288
 
@@ -24,7 +24,7 @@ let
 
     server:
       port: 24242
-      host: 0.0.0.0
+      host: "::"
 
     rules:
       - type: all
