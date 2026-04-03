@@ -59,6 +59,13 @@
     curl
   ];
 
+  # ---------- Power ----------
+  # Keep system always on (server use)
+  systemd.targets.sleep.enable = false;
+  systemd.targets.suspend.enable = false;
+  systemd.targets.hibernate.enable = false;
+  systemd.targets.hybrid-sleep.enable = false;
+
   # ---------- Misc ----------
   time.timeZone = "Atlantic/Madeira";
   system.stateVersion = "25.11";
