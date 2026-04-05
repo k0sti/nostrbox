@@ -179,6 +179,14 @@ in
     24242  # blossom media server
   ];
 
+  # ---------- Power management (never suspend — services must stay up) ----------
+  powerManagement.enable = false;
+  systemd.targets.sleep.enable = false;
+  systemd.targets.suspend.enable = false;
+  systemd.targets.hibernate.enable = false;
+  systemd.targets.hybrid-sleep.enable = false;
+  services.logind.settings.Login.IdleAction = "ignore";
+
   # ---------- Nix ----------
   nix.settings.experimental-features = [ "nix-command" "flakes" ];
 
