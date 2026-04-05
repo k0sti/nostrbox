@@ -4,7 +4,7 @@ let
   cfg = config.services.fips;
 
   # Generate FIPS YAML config
-  fipsConfigFile = pkgs.writeText "fips.yaml" (builtins.toJSON {
+  generatedConfigFile = pkgs.writeText "fips.yaml" (builtins.toJSON {
     node = {
       identity = {
         persistent = true;
@@ -43,9 +43,31 @@ let
       socket_path = cfg.socketPath;
     };
   });
+
+  fipsConfigFile = if cfg.configFile != null then cfg.configFile else generatedConfigFile;
+
+  fipsSeedConfigScript = pkgs.writeShellScriptBin "fips-seed-config" ''
+    dest="''${1:-$HOME/.config/fips/fips.yaml}"
+    dir="$(dirname "$dest")"
+    mkdir -p "$dir"
+    if [ -f "$dest" ]; then
+      echo "Config already exists at $dest"
+      echo "Use -f as second arg to overwrite"
+      [ "''${2}" = "-f" ] || exit 1
+    fi
+    ${pkgs.yq-go}/bin/yq -P < ${generatedConfigFile} > "$dest"
+    echo "Seeded FIPS config at $dest"
+    echo "Edit it, then restart: sudo systemctl restart fips"
+  '';
 in {
   options.services.fips = {
     enable = lib.mkEnableOption "FIPS mesh networking daemon";
+
+    configFile = lib.mkOption {
+      type = lib.types.nullOr lib.types.path;
+      default = null;
+      description = "Path to a mutable FIPS config file. When set, the generated config is ignored.";
+    };
 
     package = lib.mkOption {
       type = lib.types.package;
@@ -170,6 +192,8 @@ in {
   };
 
   config = lib.mkIf cfg.enable {
+    environment.systemPackages = [ fipsSeedConfigScript ];
+
     # FIPS systemd service
     systemd.services.fips = {
       description = "FIPS Mesh Network Daemon";
@@ -194,7 +218,7 @@ in {
         # Hardening
         NoNewPrivileges = true;
         ProtectSystem = "strict";
-        ProtectHome = true;
+        ProtectHome = if cfg.configFile != null then "read-only" else true;
         PrivateTmp = true;
         ReadWritePaths = [
           cfg.keyDir
