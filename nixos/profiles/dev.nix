@@ -72,6 +72,9 @@
     gh
     zed-editor
     direnv
+    brave
+    unzip
+    ioquake3
   ];
 
   environment.extraInit = ''

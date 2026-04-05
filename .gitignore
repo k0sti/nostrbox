@@ -36,3 +36,6 @@ nostrbox.yml
 
 # Claude Code
 .claude/
+
+temp
+data
