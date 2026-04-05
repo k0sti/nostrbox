@@ -7,6 +7,7 @@
   # ---------- Desktop (KDE Plasma 6) ----------
   services.xserver.enable = true;
   services.displayManager.sddm.enable = true;
+  services.displayManager.defaultSession = "plasmax11";
   services.desktopManager.plasma6.enable = true;
 
   services.xserver.xkb = {
@@ -59,6 +60,10 @@
     nmap
     iproute2
     wireguard-tools
+
+    # Hardware / system debugging
+    pciutils
+    mesa-demos
 
     # General dev
     ripgrep

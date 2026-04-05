@@ -1,12 +1,12 @@
 { lib, rustPlatform, fetchgit, pkg-config, openssl, ffmpeg, libclang, llvmPackages }:
 
-rustPlatform.buildRustPackage rec {
+rustPlatform.buildRustPackage {
   pname = "route96";
   version = "0.6.1";
 
   src = fetchgit {
     url = "https://git.v0l.io/Kieran/route96.git";
-    rev = "v${version}";
+    rev = "v0.6.1";
     hash = "sha256-C6OnzLrDKJbHNH/J2WaUm66ylBEgkCXzLMDqeQwpNEc=";
     fetchSubmodules = false;
   };
@@ -20,11 +20,7 @@ rustPlatform.buildRustPackage rec {
   buildInputs = [ openssl ffmpeg ];
 
   LIBCLANG_PATH = "${libclang.lib}/lib";
-
-  # sqlx migrations are embedded at compile time
   SQLX_OFFLINE = "true";
-
-  # phash tests require ffmpeg in PATH at test time
   doCheck = false;
 
   meta = {

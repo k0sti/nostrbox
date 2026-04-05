@@ -1,34 +1,22 @@
 { config, lib, pkgs, inputs, ... }:
 
-let
-  strfryConfig = pkgs.writeText "strfry.conf" ''
-    db = "/var/lib/strfry/strfry-db/"
-
-    relay {
-        bind = "::"
-        port = 4869
-        nofiles = 524288
-
-        info {
-            name = "NostrBox Relay"
-            description = "NostrBox appliance relay"
-        }
-    }
-  '';
-
-  blossomConfig = pkgs.writeText "config.yml" ''
-    db_path: /var/lib/blossom/db/database.sqlite3
-    api_addr: "[::]:24242"
-    cdn_url: http://localhost:24242
-    max_upload_size_bytes: 104857600
-    allowed_mime_types:
-      - "*"
-  '';
-in
 {
   imports = [
     ./hardware-configuration.nix
   ];
+
+  # ---------- Graphics (Intel integrated) ----------
+  hardware.graphics = {
+    enable = true;
+    extraPackages = with pkgs; [
+      intel-vaapi-driver      # i965 VA-API (Haswell)
+      libva-vdpau-driver
+      libvdpau-va-gl
+    ];
+  };
+
+  # Force i965 driver for Haswell (iHD doesn't support pre-Broadwell)
+  environment.variables.LIBVA_DRIVER_NAME = "i965";
 
   # ---------- Boot ----------
   boot.loader.systemd-boot.enable = true;
@@ -92,76 +80,22 @@ in
     ];
   };
 
-  # ---------- Strfry Nostr relay ----------
-  systemd.services.strfry = {
-    description = "Strfry Nostr Relay";
-    after = [ "network-online.target" ];
-    wants = [ "network-online.target" ];
-    wantedBy = [ "multi-user.target" ];
-
-    serviceConfig = {
-      Type = "simple";
-      User = "strfry";
-      Group = "strfry";
-      ExecStartPre = "${pkgs.coreutils}/bin/mkdir -p /var/lib/strfry/strfry-db";
-      ExecStart = "${pkgs.strfry}/bin/strfry --config=${strfryConfig} relay";
-      WorkingDirectory = "/var/lib/strfry";
-      Restart = "on-failure";
-      RestartSec = 10;
-      StateDirectory = "strfry";
-
-      NoNewPrivileges = true;
-      ProtectSystem = "strict";
-      ProtectHome = true;
-      ReadWritePaths = [ "/var/lib/strfry" ];
-    };
+  # ---------- Nostr relay ----------
+  services.nostr-relay = {
+    enable = true;
+    name = "NostrBox Relay";
+    description = "NostrBox appliance relay";
+    openFirewall = true;
   };
 
-  users.users.strfry = {
-    isSystemUser = true;
-    group = "strfry";
-    home = "/var/lib/strfry";
+  # ---------- Blossom media server (route96) ----------
+  services.blossom = {
+    enable = true;
+    listen = "[::]:24242";
+    publicUrl = "http://localhost:24242";
+    maxUploadBytes = 524288000; # 500MB
+    openFirewall = true;
   };
-  users.groups.strfry = {};
-
-  # ---------- Blossom media server ----------
-  systemd.services.blossom = {
-    description = "Blossom Media Server";
-    after = [ "network-online.target" ];
-    wants = [ "network-online.target" ];
-    wantedBy = [ "multi-user.target" ];
-
-    serviceConfig = {
-      Type = "simple";
-      User = "blossom";
-      Group = "blossom";
-      ExecStart = "${pkgs.blossom-server}/bin/blossom-server";
-      WorkingDirectory = "/var/lib/blossom";
-      Restart = "on-failure";
-      RestartSec = 10;
-      StateDirectory = "blossom";
-
-      NoNewPrivileges = true;
-      ProtectSystem = "strict";
-      ProtectHome = true;
-      ReadWritePaths = [ "/var/lib/blossom" ];
-    };
-  };
-
-  users.users.blossom = {
-    isSystemUser = true;
-    group = "blossom";
-    home = "/var/lib/blossom";
-  };
-  users.groups.blossom = {};
-
-  systemd.tmpfiles.rules = [
-    "d /var/lib/blossom 0755 blossom blossom -"
-    "d /var/lib/blossom/db 0755 blossom blossom -"
-    "L /var/lib/blossom/config.yml - - - - ${blossomConfig}"
-    # Go blossom-server reads migrations from db/migrations relative to CWD
-    "L+ /var/lib/blossom/db/migrations - - - - ${pkgs.blossom-server}/share/blossom-server/db/migrations"
-  ];
 
   # ---------- NostrBox service ----------
   # Uncomment once the package builds
@@ -172,12 +106,6 @@ in
   #   bindAddress = "0.0.0.0:3400";
   #   openFirewall = true;
   # };
-
-  # ---------- Firewall ----------
-  networking.firewall.allowedTCPPorts = [
-    4869   # strfry relay (ws)
-    24242  # blossom media server
-  ];
 
   # ---------- Power management (never suspend — services must stay up) ----------
   powerManagement.enable = false;

@@ -22,7 +22,7 @@ in {
 
     database = lib.mkOption {
       type = lib.types.str;
-      default = "mysql://blossom@localhost/route96";
+      default = "mysql://blossom:blossom@localhost/route96?socket=/run/mysqld/mysqld.sock";
       description = "MySQL connection string";
     };
 
@@ -65,6 +65,11 @@ in {
           };
         }
       ];
+      # Switch blossom user from unix_socket to native password auth (sqlx doesn't support unix_socket)
+      initialScript = pkgs.writeText "blossom-mysql-init.sql" ''
+        ALTER USER IF EXISTS 'blossom'@'localhost' IDENTIFIED BY 'blossom';
+        FLUSH PRIVILEGES;
+      '';
     };
 
     systemd.services.blossom = {
@@ -73,6 +78,8 @@ in {
       wants = [ "network-online.target" ];
       requires = [ "mysql.service" ];
       wantedBy = [ "multi-user.target" ];
+
+      environment.RUST_LOG = "info,route96=debug";
 
       serviceConfig = {
         Type = "simple";
