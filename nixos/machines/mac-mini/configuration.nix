@@ -48,6 +48,20 @@ in
   networking.hostName = "nostrbox";
   networking.networkmanager.enable = true;
 
+  # ---------- DNS: route .fips domains to FIPS DNS responder ----------
+  services.dnsmasq = {
+    enable = true;
+    settings = {
+      listen-address = "127.0.0.1";
+      bind-interfaces = true;
+      server = [
+        "/fips/127.0.0.1#5354"
+        "1.1.1.1"
+        "8.8.8.8"
+      ];
+    };
+  };
+
   # ---------- SSH ----------
   services.openssh = {
     enable = true;
