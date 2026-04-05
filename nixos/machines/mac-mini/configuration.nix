@@ -71,6 +71,9 @@ in
     };
   };
 
+  # Symlink /etc/fips/hosts -> mutable user file (hardcoded path in fips binary)
+  environment.etc."fips/hosts".source = "/home/k0/.config/fips/hosts";
+
   # ---------- FIPS mesh networking ----------
   services.fips = {
     enable = true;
