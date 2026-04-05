@@ -218,7 +218,7 @@ in {
         # Hardening
         NoNewPrivileges = true;
         ProtectSystem = "strict";
-        ProtectHome = if cfg.configFile != null then false else true;
+        ProtectHome = if cfg.configFile != null then "read-only" else true;
         PrivateTmp = true;
         ReadWritePaths = [
           cfg.keyDir
