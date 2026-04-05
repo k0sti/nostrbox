@@ -12,7 +12,11 @@
 
   outputs = { self, nixpkgs, fips, ... }:
     let
+      pkgsFor = system: import nixpkgs { inherit system; };
       specialArgs = { inputs = { inherit self fips; }; };
+      overlay = final: prev: {
+        blossom-server = final.callPackage ./packages/blossom-server.nix {};
+      };
     in {
       # Machine configurations
       # Build: nixos-rebuild switch --flake .#mac-mini
@@ -20,6 +24,7 @@
         system = "x86_64-linux";
         inherit specialArgs;
         modules = [
+          { nixpkgs.overlays = [ overlay ]; }
           ./modules/nostrbox.nix
           ./modules/fips.nix
           ./users.nix
@@ -32,6 +37,7 @@
         system = "x86_64-linux";
         inherit specialArgs;
         modules = [
+          { nixpkgs.overlays = [ overlay ]; }
           ./modules/nostrbox.nix
           ./modules/fips.nix
           ./users.nix

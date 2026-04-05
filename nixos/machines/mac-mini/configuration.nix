@@ -17,18 +17,12 @@ let
   '';
 
   blossomConfig = pkgs.writeText "config.yml" ''
-    storage:
-      backend: local
-      local:
-        dir: ./data/blobs
-
-    server:
-      port: 24242
-      host: "::"
-
-    rules:
-      - type: all
-        expiration: false
+    db_path: /var/lib/blossom/db/database.sqlite3
+    api_addr: "[::]:24242"
+    cdn_url: http://localhost:24242
+    max_upload_size_bytes: 104857600
+    allowed_mime_types:
+      - "*"
   '';
 in
 {
@@ -67,6 +61,7 @@ in
   services.fips = {
     enable = true;
     package = inputs.fips.packages.x86_64-linux.fips-ble;
+    configFile = "/home/k0/.config/fips/fips.yaml";
     transports = [ "udp" ];
     ethernet = {
       enable = true;
@@ -126,7 +121,7 @@ in
       Type = "simple";
       User = "blossom";
       Group = "blossom";
-      ExecStart = "${pkgs.nodejs_22}/bin/npx blossom-server-ts";
+      ExecStart = "${pkgs.blossom-server}/bin/blossom-server";
       WorkingDirectory = "/var/lib/blossom";
       Restart = "on-failure";
       RestartSec = 10;
@@ -136,11 +131,6 @@ in
       ProtectSystem = "strict";
       ProtectHome = true;
       ReadWritePaths = [ "/var/lib/blossom" ];
-    };
-
-    environment = {
-      HOME = "/var/lib/blossom";
-      npm_config_cache = "/var/lib/blossom/.npm";
     };
   };
 
@@ -153,8 +143,10 @@ in
 
   systemd.tmpfiles.rules = [
     "d /var/lib/blossom 0755 blossom blossom -"
-    "d /var/lib/blossom/data 0755 blossom blossom -"
+    "d /var/lib/blossom/db 0755 blossom blossom -"
     "L /var/lib/blossom/config.yml - - - - ${blossomConfig}"
+    # Go blossom-server reads migrations from db/migrations relative to CWD
+    "L+ /var/lib/blossom/db/migrations - - - - ${pkgs.blossom-server}/share/blossom-server/db/migrations"
   ];
 
   # ---------- NostrBox service ----------
@@ -186,7 +178,6 @@ in
     curl
     nak
     strfry
-    nodejs_22  # for blossom npx
     inputs.fips.packages.x86_64-linux.fips-ble  # fipsctl, fipstop
   ];
 
