@@ -115,6 +115,9 @@
   systemd.targets.hybrid-sleep.enable = false;
   services.logind.settings.Login.IdleAction = "ignore";
 
+  # ---------- Firewall ----------
+  networking.firewall.trustedInterfaces = [ "fips0" ];
+
   # ---------- Nix ----------
   nix.settings.experimental-features = [ "nix-command" "flakes" ];
 
